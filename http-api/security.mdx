@@ -1,0 +1,282 @@
+---
+id: http-security
+title: Security | HTTP API
+sidebar_label: Security
+sidebar_position: 1
+---
+
+import Tabs from "@theme/Tabs";
+import TabItem from "@theme/TabItem";
+
+# Security with HTTP API
+
+EventStoreDB supports basic authentication for HTTP API calls and access control lists (ACL).
+
+## Authentication
+
+### Creating users
+
+Many API resources require basic HTTP authentication of internal users. You create these users with the HTTP API or the admin console. For a new project, you need to use the credentials of the default user in the request, which has the username of `admin`, and the password of `changeit`.
+
+Send the following JSON payload to the server:
+
+```json
+{
+  "LoginName": "adminuser",
+  "FullName": "EventStore Admin",
+  "Groups": ["$admins", "DataScience"],
+  "Password": "aVerySecurePassword"
+}
+```
+
+<Tabs>
+<TabItem value="request" label="Request">
+
+```bash
+curl -i -d "@new-user.json" "http://127.0.0.1:2113/users" \
+    -H "Content-Type:application/json"
+```
+
+</TabItem>
+<TabItem value="response" label="Response">
+
+```http
+HTTP/1.1 201 Created
+Access-Control-Allow-Methods: GET, POST, OPTIONS
+Access-Control-Allow-Headers: Content-Type, X-Requested-With, X-Forwarded-Host, X-Forwarded-Prefix, X-PINGOTHER, Authorization, ES-LongPoll, ES-ExpectedVersion, ES-EventId, ES-EventType, ES-RequiresMaster, ES-HardDelete, ES-ResolveLinkTos
+Access-Control-Allow-Origin: *
+Access-Control-Expose-Headers: Location, ES-Position, ES-CurrentVersion
+Location: http://127.0.0.1:2113/users/adminuser
+Content-Type: application/json; charset=utf-8
+Server: Mono-HTTPAPI/1.0
+Date: Thu, 23 Aug 2018 09:08:40 GMT
+Content-Length: 90
+Keep-Alive: timeout=15,max=100
+
+{
+  "loginName": "adminuser",
+  "success": true,
+  "error": "Success",
+  "msgTypeId": 50
+}
+
+```
+
+</TabItem>
+</Tabs>
+
+Once you have added users, you can use their details with requests.
+
+If you were to use the wrong user or no user when a request requires one, you receive a `401 Unauthorized` response.
+
+<Tabs>
+  <TabItem value="request" label="Request">
+
+```bash
+curl -i 'http://127.0.0.1:2113/streams/$all' -u admin:password
+```
+
+  </TabItem>
+  <TabItem value="response" label="Response">
+
+```http
+HTTP/1.1 401 Unauthorized
+Access-Control-Allow-Methods:
+Access-Control-Allow-Headers: Content-Type, X-Requested-With, X-Forwarded-Host,   X-Forwarded-Prefix, X-PINGOTHER, Authorization, ES-LongPoll, ES-ExpectedVersion,   ES-EventId, ES-EventType, ES-RequiresMaster, ES-HardDelete, ES-ResolveLinkTos
+Access-Control-Allow-Origin: *
+Access-Control-Expose-Headers: Location, ES-Position, ES-CurrentVersion
+WWW-Authenticate: Basic realm="ES"
+Content-Type:
+Server: Mono-HTTPAPI/1.0
+Date: Thu, 23 Aug 2018 09:27:34 GMT
+Content-Length: 0
+Keep-Alive: timeout=15,max=100
+```
+
+  </TabItem>
+</Tabs>
+
+As you pass the username and password in the request, we recommend you to enable SSL to encrypt the user information. [Read this guide for instructions](pathname:///../../../security).
+
+## Access control lists
+
+Alongside authentication, EventStoreDB supports per stream configuration of Access Control Lists (ACL). To configure the ACL of a stream go to its head and look for the `metadata` relationship link to fetch the metadata for the stream.
+
+To set access control lists over HTTP you can post to the metadata stream as [with setting any other metadata](README.mdx#stream-metadata). You can also set Access Control Lists for a stream in the admin UI.
+
+### ACL example
+
+The ACL below gives `writer` read and write permission on the stream, while `reader` has read permission on the stream. Only users in the `$admins` group can delete the stream or read and write the metadata.
+
+The request body placed in the file named `acl_metadata.json`:
+
+```json
+[
+  {
+    "eventId": "7c314750-05e1-439f-b2eb-f5b0e019be72",
+    "eventType": "$acl-updated",
+    "data": {
+      "acl": {
+        "r": ["reader", "writer"],
+        "w": "writer",
+        "d": "$admins",
+        "mr": "$admins",
+        "mw": "$admins"
+      }
+    }
+  }
+]
+```
+
+Then, when you execute HTTP request as follows:
+
+```bash
+curl -i -d @acl_metadata.json http://127.0.0.1:2113/streams/newstream/metadata \
+    --user admin:changeit \
+    -H "Content-Type: application/vnd.eventstore.events+json"
+```
+
+You get a confirmation from the server:
+
+```http
+HTTP/1.1 201 Created
+Access-Control-Allow-Methods: GET, POST, GET, OPTIONS
+Access-Control-Allow-Headers: Content-Type, X-Requested-With, X-Forwarded-Host, X-Forwarded-Prefix, X-PINGOTHER, Authorization, ES-LongPoll, ES-ExpectedVersion, ES-EventId, ES-EventType, ES-RequiresMaster, ES-HardDelete, ES-ResolveLinkTos
+Access-Control-Allow-Origin: *
+Access-Control-Expose-Headers: Location, ES-Position, ES-CurrentVersion
+Location: http://127.0.0.1:2113/streams/%24%24newstream/0
+Content-Type: text/plain; charset=utf-8
+Server: Mono-HTTPAPI/1.0
+Date: Tue, 18 Sep 2018 09:38:56 GMT
+Content-Length: 0
+Keep-Alive: timeout=15,max=100
+```
+
+## Default ACL
+
+:::tip
+The examples below assume you have created a user named `ouro` with password `ouroboros`.
+:::
+
+If you try to access the `$settings` stream as an unauthorized user, the server returns a 401 response.
+
+<Tabs>
+<TabItem value="request" label="Request">
+
+```bash
+curl -i http://127.0.0.1:2113/streams/%24settings \
+    -u ouro:ouroboros
+```
+
+</TabItem>
+<TabItem value="response" label="Response">
+
+```http
+HTTP/1.1 401 Unauthorized
+Access-Control-Allow-Methods: POST, DELETE, GET, OPTIONS
+Access-Control-Allow-Headers: Content-Type, X-Requested-With, X-PINGOTHER, Authorization, ES-LongPoll, ES-ExpectedVersion, ES-EventId, ES-EventType, ES-RequiresMaster, ES-HardDelete, ES-ResolveLinkTo, ES-ExpectedVersion
+Access-Control-Allow-Origin: *
+Access-Control-Expose-Headers: Location, ES-Position
+WWW-Authenticate: Basic realm="ES"
+Content-Type: text/plain; charset=utf-8
+Server: Mono-HTTPAPI/1.0
+Date: Mon, 02 Mar 2015 15:21:27 GMT
+Content-Length: 0
+Keep-Alive: timeout=15,max=100
+```
+
+</TabItem>
+</Tabs>
+
+If you wanted to give `ouro` access by default to system streams, save following JSON as `defaultacl.json`:
+
+```json
+{
+  "data": {
+    "$userStreamAcl": {
+      "$r": "$all",
+      "$w": "ouro",
+      "$d": "ouro",
+      "$mr": "ouro",
+      "$mw": "ouro"
+    },
+    "$systemStreamAcl": {
+      "$r": ["$admins", "ouro"],
+      "$w": "$admins",
+      "$d": "$admins",
+      "$mr": "$admins",
+      "$mw": "$admins"
+    }
+  }
+}
+```
+
+Then send this JSON in a POST request to the `$settings` stream using an existing admin user's credentials.
+
+```bash
+curl -i -d "@defaultacl.json" http://127.0.0.1:2113/streams/%24settings \
+    -H "Content-Type: application/json" \
+    -H "ES-EventType: "$acl-updated" \
+    -H "ES-EventId": "3e1ad5b2-043f-4cf6-8b84-0fe34d7a4b0c" \
+    -u "admin:changeit"
+```
+
+At which point `ouro` can read system streams by default.
+
+<Tabs>
+<TabItem value="request" label="Request">
+
+```bash
+curl -i http://127.0.0.1:2113/streams/%24settings \
+    -u ouro:ouroboros
+```
+
+</TabItem>
+<TabItem value="response" label="Response">
+
+```http
+HTTP/1.1 200 OK
+Access-Control-Allow-Methods: POST, DELETE, GET, OPTIONS
+Access-Control-Allow-Headers: Content-Type, X-Requested-With, X-PINGOTHER, Authorization, ES-LongPoll, ES-ExpectedVersion, ES-EventId, ES-EventType, ES-RequiresMaster, ES-HardDelete, ES-ResolveLinkTo, ES-ExpectedVersion
+Access-Control-Allow-Origin: *
+Access-Control-Expose-Headers: Location, ES-Position
+Cache-Control: max-age=0, no-cache, must-revalidate
+Vary: Accept
+ETag: "1;-1296467268"
+Content-Type: application/atom+xml; charset=utf-8
+Server: Mono-HTTPAPI/1.0
+Date: Mon, 02 Mar 2015 15:25:17 GMT
+Content-Length: 1286
+Keep-Alive: timeout=15,max=100
+```
+
+</TabItem>
+</Tabs>
+
+You can also limit ACLs on particular streams by setting the following `$acl` object in the metadata, which are then merged with the default ACLs.
+
+```json
+{
+  "$acl": {
+    "$r": ["reader", "also-reader"]
+  }
+}
+```
+
+If you add the above to a stream's ACL, then it overrides the read permission on the specified stream to allow `reader` and `also-reader` to read streams, but not `ouro`, resulting in the effective ACL below.
+
+```json
+{
+  "$acl": {
+    "$r": ["reader", "also-reader"],
+    "$w": "ouro",
+    "$d": "ouro",
+    "$mr": "ouro",
+    "$mw": "ouro"
+  }
+}
+```
+
+:::warning
+Caching is allowed on a stream if you have enabled it to be visible to `$all`. This is as a performance optimization to avoid having to set `cache=private` on all data. If people are bookmarking your URIs and they were cached by an intermediary, then they may still be accessible after you change the permissions from `$all`. While clients should not be bookmarking URIs in this way, it's an important consideration.
+:::

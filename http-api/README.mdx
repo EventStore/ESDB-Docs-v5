@@ -1,0 +1,2704 @@
+---
+id: http-introduction
+title: Introduction | HTTP API
+sidebar_label: Introduction
+sidebar_position: 0
+---
+
+import Tabs from "@theme/Tabs";
+import TabItem from "@theme/TabItem";
+
+# Introduction to HTTP API
+
+## Overview
+
+EventStoreDB provides a native interface of AtomPub over HTTP. AtomPub is a RESTful protocol that can reuse many existing components, for example reverse proxies and a client's native HTTP caching. Since events stored in EventStoreDB are immutable, cache expiration can be infinite. EventStoreDB leverages content type negotiation and you can access appropriately serialized events can as JSON or XML according to the request headers.
+
+### Compatibility with AtomPub
+
+EventStoreDB is fully compatible with the [1.0 version of the Atom Protocol](https://datatracker.ietf.org/doc/html/rfc4287). EventStoreDB adds extensions to the protocol, such as headers for control and custom `rel` links.
+
+:::warning
+The AtomPub protocol is disabled by default. We do not advise creating new applications using AtomPub as we plan to deprecate it. Please explore our gRPC protocol available in v20+. It provides more reliable real-time event streaming with a wide range of platforms and languages supported.
+:::
+
+#### Existing implementations
+
+Many environments have already implemented the AtomPub protocol, which simplifies the process.
+
+| Library   | Description                                                                                          |
+| --------- | ---------------------------------------------------------------------------------------------------- |
+| NET (BCL) | `System.ServiceModel.SyndicationServices`                                                            |
+| JVM       | [http://java-source.net/open-source/rss-rdf-tools](http://java-source.net/open-source/rss-rdf-tools) |
+| PHP       | [http://simplepie.org/](http://simplepie.org/)                                                       |
+| Ruby      | [https://github.com/cardmagic/simple-rss](https://github.com/cardmagic/simple-rss)                   |
+| Clojure   | [https://github.com/scsibug/feedparser-clj](https://github.com/scsibug/feedparser-clj)               |
+| Python    | [http://code.google.com/p/feedparser/](http://code.google.com/p/feedparser/)                         |
+| node.js   | [https://github.com/danmactough/node-feedparser](https://github.com/danmactough/node-feedparser)     |
+
+:::warning
+These are not officially supported by EventStoreDB.
+:::
+
+#### Content types
+
+The preferred way of determining which content type responses EventStoreDB serves is to set the `Accept` header on the request. As some clients do not deal well with HTTP headers when caching, appending a format parameter to the URL is also supported, for example, `?format=xml`.
+
+The accepted content types for POST requests are:
+
+- `application/xml`
+- `application/vnd.eventstore.events+xml`
+- `application/json`
+- `application/vnd.eventstore.events+json`
+- `text/xml`
+
+The accepted content types for GET requests are:
+
+- `application/xml`
+- `application/atom+xml`
+- `application/json`
+- `application/vnd.eventstore.atom+json`
+- `text/xml`
+- `text/html`
+- `application/vnd.eventstore.streamdesc+json`
+
+## Appending Events
+
+You append to a stream over HTTP using a `POST` request to the resource of the stream. If the stream does not exist then the stream is implicitly created.
+
+### EventStoreDB media types
+
+EventStoreDB supports a custom media type for posting events, `application/vnd.eventstore.events+json` or `application/vnd.eventstore.events+xml`. This format allows for extra functionality that posting events as `application/json` or `application/xml` does not. For example it allows you to post multiple events in a single batch.
+
+<!-- TODO: And more? Why not use it? And why are these examples not using it? -->
+
+The format represents data with the following jschema (`eventId` must be a UUID).
+
+```json
+[
+  {
+    "eventId": "string",
+    "eventType": "string",
+    "data": "object",
+    "metadata": "object"
+  }
+]
+```
+
+### Appending a single event to a new stream
+
+If you issue a `POST` request with data to a stream and the correct content type set, it appends the event to the stream and generates a `201` response from the server, giving you the location of the event. Let's use the following event, which you can save as `event.json`:
+
+```json
+[
+  {
+    "eventId": "fbf4a1a1-b4a3-4dfe-a01f-ec52c34e16e4",
+    "eventType": "event-type",
+    "data": {
+      "a": "1"
+    }
+  }
+]
+```
+
+`POST` the following request to create a stream and add an event to it:
+
+<Tabs>
+<TabItem value="request" label="Request">
+
+```bash
+curl -i -d "@event.json" "http://127.0.0.1:2113/streams/newstream" \
+    -H "Content-Type:application/vnd.eventstore.events+json"
+    -u "admin:changeit"
+```
+
+</TabItem>
+<TabItem value="response" label="Response">
+
+```json
+HTTP/1.1 201 Created
+Access-Control-Allow-Methods: POST, DELETE, GET, OPTIONS
+Access-Control-Allow-Headers: Content-Type, X-Requested-With, X-PINGOTHER
+Access-Control-Allow-Origin: *
+Location: http://127.0.0.1:2113/streams/newstream/0
+Content-Type: text/plain; charset: utf-8
+Server: Mono-HTTPAPI/1.0
+Date: Fri, 28 Jun 2013 12:17:59 GMT
+Content-Length: 0
+Keep-Alive: timeout=15,max=100
+```
+
+</TabItem>
+</Tabs>
+
+Some clients may not be able to generate a unique identifier (or may not want to) for the event ID. You need this ID for idempotence purposes and EventStoreDB can generate it for you.
+
+If you leave off the `ES-EventId` header you see different behavior:
+
+<Tabs>
+<TabItem value="request" label="Request">
+
+```bash
+curl -i -d "@event.json" "http://127.0.0.1:2113/streams/newstream" \
+    -H "Content-Type:application/json" \
+    -H "ES-EventType: SomeEvent"
+```
+
+</TabItem>
+<TabItem value="response" label="Response">
+
+```json
+HTTP/1.1 307 Temporary Redirect
+Access-Control-Allow-Methods: POST, DELETE, GET, OPTIONS
+Access-Control-Allow-Headers: Content-Type, X-Requested-With, X-Forwarded-Host, X-Forwarded-Prefix, X-PINGOTHER, Authorization, ES-LongPoll, ES-ExpectedVersion, ES-EventId, ES-EventType, ES-RequiresMaster, ES-HardDelete, ES-ResolveLinkTos
+Access-Control-Allow-Origin: *
+Access-Control-Expose-Headers: Location, ES-Position, ES-CurrentVersion
+Location: http://127.0.0.1:2113/streams/newstream/incoming/8a00e469-3a99-4517-a0b0-8dc662ffad9b
+Content-Type: text/plain; charset=utf-8
+Server: Mono-HTTPAPI/1.0
+Date: Tue, 24 Jul 2018 14:42:44 GMT
+Content-Length: 28
+Keep-Alive: timeout=15,max=100
+Forwarding to idempotent URI%
+```
+
+</TabItem>
+</Tabs>
+
+In this case, EventStoreDB has responded with a `307 Temporary Redirect`. The location points to another URI that you can post the event to. This new URI is idempotent for posting, even without an event ID.
+
+<Tabs>
+<TabItem value="request" label="Request">
+
+```bash
+curl -i -d "@event.json" "http://127.0.0.1:2113/streams/newstream/incoming/8a00e469-3a99-4517-a0b0-8dc662ffad9b" \
+    -H "Content-Type: application/json" -H "ES-EventType: SomeEvent"
+
+```
+
+</TabItem>
+<TabItem value="response" label="Response">
+
+```json
+HTTP/1.1 201 Created
+Access-Control-Allow-Methods: GET, POST, OPTIONS
+Access-Control-Allow-Headers: Content-Type, X-Requested-With, X-Forwarded-Host, X-Forwarded-Prefix, X-PINGOTHER, Authorization, ES-LongPoll, ES-ExpectedVersion, ES-EventId, ES-EventType, ES-RequiresMaster, ES-HardDelete, ES-ResolveLinkTos
+Access-Control-Allow-Origin: *
+Access-Control-Expose-Headers: Location, ES-Position, ES-CurrentVersion
+Location: http://127.0.0.1:2113/streams/newstream/0
+Content-Type: text/plain; charset=utf-8
+Server: Mono-HTTPAPI/1.0
+Date: Tue, 24 Jul 2018 14:46:10 GMT
+Content-Length: 0
+Keep-Alive: timeout=15,max=100
+```
+
+</TabItem>
+</Tabs>
+
+It's generally recommended to include an event ID if possible as it results in fewer round trips between the client and the server.
+
+When posting to either the stream or to the returned redirect, clients must include the `EventType` header. If you forget to include the header, you receive an error.
+
+<Tabs>
+<TabItem value="request" label="Request">
+
+```bash
+curl -i -d "@event.json" "http://127.0.0.1:2113/streams/newstream" -H "Content-Type:application/json"
+```
+
+</TabItem>
+<TabItem value="response" label="Response">
+
+```json
+HTTP/1.1 400 Must include an event type with the request either in body or as ES-EventType header.
+Access-Control-Allow-Methods: POST, DELETE, GET, OPTIONS
+Access-Control-Allow-Headers: Content-Type, X-Requested-With, X-Forwarded-Host, X-Forwarded-Prefix, X-PINGOTHER, Authorization, ES-LongPoll, ES-ExpectedVersion, ES-EventId, ES-EventType, ES-RequiresMaster, ES-HardDelete, ES-ResolveLinkTos
+Access-Control-Allow-Origin: *
+Access-Control-Expose-Headers: Location, ES-Position, ES-CurrentVersion
+Content-Type:
+Server: Mono-HTTPAPI/1.0
+Date: Tue, 24 Jul 2018 14:50:59 GMT
+Content-Length: 0
+Connection: close
+```
+
+</TabItem>
+</Tabs>
+
+### Batch append operation
+
+You can append more than one event in a single post by placing multiple events inside the array representing the events, including metadata.
+
+For example, the below has two events:
+
+```json
+[
+  {
+    "eventId": "fbf4b1a1-b4a3-4dfe-a01f-ec52c34e16e4",
+    "eventType": "event-type",
+    "data": {
+      "a": "1"
+    }
+  },
+  {
+    "eventId": "0f9fad5b-d9cb-469f-a165-70867728951e",
+    "eventType": "event-type",
+    "data": {
+      "b": "2"
+    }
+  }
+]
+```
+
+When you append multiple events in a single post, EventStoreDB treats them as one transaction and appends all events together or fails.
+
+<Tabs>
+<TabItem value="request" label="Request">
+
+```bash
+curl -i -d "@multiple-events.json" "http://127.0.0.1:2113/streams/newstream" \
+    -H "Content-Type:application/vnd.eventstore.events+json"
+```
+
+</TabItem>
+<TabItem value="response" label="Response">
+
+```json
+HTTP/1.1 201 Created
+Access-Control-Allow-Methods: POST, DELETE, GET, OPTIONS
+Access-Control-Allow-Headers: Content-Type, X-Requested-With, X-PINGOTHER
+Access-Control-Allow-Origin: *
+Location: http://127.0.0.1:2113/streams/newstream/1
+Content-Type: text/plain; charset: utf-8
+Server: Mono-HTTPAPI/1.0
+Date: Fri, 28 Jun 2013 12:32:18 GMT
+Content-Length: 0
+Keep-Alive: timeout=15,max=100
+```
+
+</TabItem>
+</Tabs>
+
+#### Appending events
+
+To append events, issue a `POST` request to the same resource with a new `eventId`:
+
+```json
+[
+  {
+    "eventId": "fbf4a1a1-b4a3-4dfe-a01f-ec52c34e16e5",
+    "eventType": "event-type",
+    "data": {
+      "b": "2"
+    }
+  }
+]
+```
+
+<Tabs>
+<TabItem value="request" label="Request">
+
+```bash
+curl -i -d "@event-append.json" "http://127.0.0.1:2113/streams/newstream" \
+    -H "Content-Type:application/vnd.eventstore.events+json" \
+    -H "ES-EventType: SomeEvent"
+```
+
+</TabItem>
+<TabItem value="response" label="Response">
+
+```json
+HTTP/1.1 201 Created
+Access-Control-Allow-Methods: POST, DELETE, GET, OPTIONS
+Access-Control-Allow-Headers: Content-Type, X-Requested-With, X-PINGOTHER
+Access-Control-Allow-Origin: *
+Location: http://127.0.0.1:2113/streams/newstream/1
+Content-Type: text/plain; charset: utf-8
+Server: Mono-HTTPAPI/1.0
+Date: Fri, 28 Jun 2013 12:32:18 GMT
+Content-Length: 0
+Keep-Alive: timeout=15,max=100
+```
+
+</TabItem>
+</Tabs>
+
+### Data-only events
+
+EventStoreDB supports the `application/octet-stream` content type for data-only binary events. When creating these events, you need to provide the `ES-EventType` and `ES-EventId` headers and cannot have metadata associated with the event. In the example below, `SGVsbG8gV29ybGQ=` is the data you `POST` to the stream:
+
+<Tabs>
+<TabItem value="request" label="Request">
+
+```bash
+curl -i -d "SGVsbG8gV29ybGQ=" "http://127.0.0.1:2113/streams/newstream" \
+    -H "Content-Type:application/octet-stream" \
+    -H "ES-EventType:rawDataType" \
+    -H "ES-EventId:eeccf3ce-4f54-409d-8870-b35dd836cca6"
+```
+
+</TabItem>
+<TabItem value="response" label="Response">
+
+```json
+HTTP/1.1 201 Created
+Access-Control-Allow-Methods: POST, DELETE, GET, OPTIONS
+Access-Control-Allow-Headers: Content-Type, X-Requested-With, X-Forwarded-Host, X-PINGOTHER, Authorization, ES-LongPoll, ES-ExpectedVersion, ES-EventId, ES-EventType, ES-RequiresMaster, ES-HardDelete, ES-ResolveLinkTo, ES-ExpectedVersion
+Access-Control-Allow-Origin: *
+Access-Control-Expose-Headers: Location, ES-Position
+Location: http://127.0.0.1:2113/streams/newstream/0
+Content-Type: text/plain; charset=utf-8
+Server: Mono-HTTPAPI/1.0
+Date: Mon, 27 Jun 2016 13:15:27 GMT
+Content-Length: 0
+Keep-Alive: timeout=15,max=100
+```
+
+</TabItem>
+</Tabs>
+
+### Expected version header
+
+The expected version header represents the version of the stream you expect.
+
+For example, if you append to a stream at version 1, then you expect it to be at version 1 the next time you append. This can allow for optimistic locking when multiple applications are reading and appending to streams.
+
+If your expected version is not the current version, you receive an HTTP status code of 400.
+
+:::tip
+If you post the same event twice it is idempotent and won't return a version error. See the idempotence section below for more details.
+:::
+
+First, append an event to a stream, setting a version:
+
+```json
+[
+  {
+    "eventId": "fbf4b1a1-b4a3-4dfe-a01f-ec52c34e16e4",
+    "eventType": "event-type",
+    "data": {
+      "a": "1"
+    }
+  }
+]
+```
+
+<Tabs>
+<TabItem value="request" label="Request">
+
+```bash
+curl -i -d @event-version.json "http://127.0.0.1:2113/streams/newstream" \
+    -H "Content-Type:application/vnd.eventstore.events+json" \
+    -H "ES-CurrentVersion: 0"
+```
+
+</TabItem>
+<TabItem value="response" label="Response">
+
+```json
+HTTP/1.1 201 Created
+Access-Control-Allow-Methods: POST, DELETE, GET, OPTIONS
+Access-Control-Allow-Headers: Content-Type, X-Requested-With, X-Forwarded-Host, X-Forwarded-Prefix, X-PINGOTHER, Authorization, ES-LongPoll, ES-ExpectedVersion, ES-EventId, ES-EventType, ES-RequiresMaster, ES-HardDelete, ES-ResolveLinkTos
+Access-Control-Allow-Origin: *
+Access-Control-Expose-Headers: Location, ES-Position, ES-CurrentVersion
+Location: http://127.0.0.1:2113/streams/newstream/2
+Content-Type: text/plain; charset=utf-8
+Server: Mono-HTTPAPI/1.0
+Date: Tue, 14 Aug 2018 10:02:08 GMT
+Content-Length: 0
+Keep-Alive: timeout=15,max=100
+```
+
+</TabItem>
+</Tabs>
+
+If you now append to the stream with the incorrect version, you receive an HTTP status code 400 error.
+
+<Tabs>
+<TabItem value="request" label="Request">
+
+```bash
+curl -i -d @event-version.json "http://127.0.0.1:2113/streams/newstream" \
+    -H "Content-Type:application/vnd.eventstore.events+json" \
+    -H "ES-ExpectedVersion: 3"
+```
+
+</TabItem>
+<TabItem value="response" label="Response">
+
+```json
+HTTP/1.1 400 Wrong expected EventNumber
+Access-Control-Allow-Methods: POST, DELETE, GET, OPTIONS
+Access-Control-Allow-Headers: Content-Type, X-Requested-With, X-Forwarded-Host, X-Forwarded-Prefix, X-PINGOTHER, Authorization, ES-LongPoll, ES-ExpectedVersion, ES-EventId, ES-EventType, ES-RequiresMaster, ES-HardDelete, ES-ResolveLinkTos
+Access-Control-Allow-Origin: *
+Access-Control-Expose-Headers: Location, ES-Position, ES-CurrentVersion
+ES-CurrentVersion: 0
+Content-Type: text/plain; charset=utf-8
+Server: Mono-HTTPAPI/1.0
+Date: Tue, 14 Aug 2018 14:08:44 GMT
+Content-Length: 0
+Connection: close
+```
+
+</TabItem>
+</Tabs>
+
+There are special values you can use in the expected version header:
+
+- `-2` states that this append operation should never conflict and should **always** succeed.
+- `-1` states that the stream should not exist at the time of the appending (this append operation creates it).
+- `0` states that the stream should exist but should be empty.
+
+### Idempotence
+
+Appends to streams are idempotent based upon the `EventId` assigned in your post. If you were to re-run the last command it returns the same value again.
+
+This is important behavior as it's how you implement error handling. If you receive a timeout, broken connection, no answer, etc from your HTTP `POST`, then it's your responsibility to retry the post. You must also keep the same UUID that you assigned to the event in the first `POST`.
+
+If you are using the expected version parameter with your post, then EventStoreDB is 100% idempotent. If you use `-2` as your expected version value, EventStoreDB does its best to keep events idempotent but cannot assure that everything is fully idempotent and you end up in 'at-least-once' messaging. [Read this guide](#optimistic-concurrency-and-idempotence) for more details on idempotence.
+
+## Reading streams and events
+
+### Reading a stream
+
+EventStoreDB exposes streams as a resource located at `http(s)://{yourdomain.com}:{port}/streams/{stream}`. If you issue a simple `GET` request to this resource, you receive a standard AtomFeed document as a response.
+
+<Tabs>
+<TabItem value="request" label="Request">
+
+```bash
+curl -i -H "Accept:application/vnd.eventstore.atom+json" "http://127.0.0.1:2113/streams/newstream" -u "admin:changeit"
+```
+
+</TabItem>
+<TabItem value="response" label="Response">
+
+```json
+HTTP/1.1 200 OK
+Access-Control-Allow-Methods: POST, DELETE, GET, OPTIONS
+Access-Control-Allow-Headers: Content-Type, X-Requested-With, X-Forwarded-Host, X-Forwarded-Prefix, X-PINGOTHER, Authorization, ES-LongPoll, ES-ExpectedVersion, ES-EventId, ES-EventType, ES-RequiresMaster, ES-HardDelete, ES-ResolveLinkTos
+Access-Control-Allow-Origin: *
+Access-Control-Expose-Headers: Location, ES-Position, ES-CurrentVersion
+Cache-Control: max-age=0, no-cache, must-revalidate
+Vary: Accept
+ETag: "0;-2060438500"
+Content-Type: application/vnd.eventstore.atom+json; charset=utf-8
+Server: Mono-HTTPAPI/1.0
+Date: Fri, 15 Dec 2017 12:23:23 GMT
+Content-Length: 1262
+Keep-Alive: timeout=15,max=100
+
+{
+  "title": "Event stream 'newstream'",
+  "id": "http://127.0.0.1:2113/streams/newstream",
+  "updated": "2017-12-15T12:19:32.021776Z",
+  "streamId": "newstream",
+  "author": {
+    "name": "EventStore"
+  },
+  "headOfStream": true,
+  "selfUrl": "http://127.0.0.1:2113/streams/newstream",
+  "eTag": "0;-2060438500",
+  "links": [
+    {
+      "uri": "http://127.0.0.1:2113/streams/newstream",
+      "relation": "self"
+    },
+    {
+      "uri": "http://127.0.0.1:2113/streams/newstream/head/backward/20",
+      "relation": "first"
+    },
+    {
+      "uri": "http://127.0.0.1:2113/streams/newstream/1/forward/20",
+      "relation": "previous"
+    },
+    {
+      "uri": "http://127.0.0.1:2113/streams/newstream/metadata",
+      "relation": "metadata"
+    }
+  ],
+  "entries": [
+    {
+      "title": "0@newstream",
+      "id": "http://127.0.0.1:2113/streams/newstream/0",
+      "updated": "2017-12-15T12:19:32.021776Z",
+      "author": {
+        "name": "EventStore"
+      },
+      "summary": "event-type",
+      "links": [
+        {
+          "uri": "http://127.0.0.1:2113/streams/newstream/0",
+          "relation": "edit"
+        },
+        {
+          "uri": "http://127.0.0.1:2113/streams/newstream/0",
+          "relation": "alternate"
+        }
+      ]
+    }
+  ]
+}
+```
+
+</TabItem>
+</Tabs>
+
+### Reading an event from a stream
+
+The response above showed only one has one item in the stream, but if there are more than one, then items are sorted from newest to oldest.
+
+For each entry, there are a series of links to the actual events. We cover embedding data into a stream [later on this page](#embedding-data-into-streams-in-json-format). To `GET` an event, follow the `alternate` link and set your `Accept` headers to the mime type you would like the event in.
+
+The accepted content types for `GET` requests are:
+
+- `application/xml`
+- `application/atom+xml`
+- `application/json`
+- `application/vnd.eventstore.atom+json`
+- `text/xml`
+- `text/html`
+
+<Tabs>
+  <TabItem value="request" label="Request">
+    
+```bash
+curl -i http://127.0.0.1:2113/streams/newstream/0 -H "Accept: application/json" -u "admin:changeit"
+```
+
+  </TabItem>
+  <TabItem value="response" label="Response">
+    
+```json
+HTTP/1.1 200 OK
+Access-Control-Allow-Methods: GET, OPTIONS
+Access-Control-Allow-Headers: Content-Type, X-Requested-With, X-PINGOTHER
+Access-Control-Allow-Origin: *
+Cache-Control: max-age=31536000, public
+Vary: Accept
+Content-Type: application/json; charset: utf-8
+Server: Mono-HTTPAPI/1.0
+Date: Wed, 03 Jul 2013 11:09:12 GMT
+Content-Length: 14
+Keep-Alive: timeout=15,max=100
+
+{
+"a": "1"
+}
+
+````
+
+  </TabItem>
+</Tabs>
+
+
+The non-atom version of the event has fewer details about the event.
+
+### Feed paging
+
+If there are more events in the stream, you will need to use the `first`, `last`, `previous`, and `next` links within a stream. EventStoreDB supplies these links so you can read through a stream, and they follow the pattern defined in [RFC 5005](https://datatracker.ietf.org/doc/html/rfc5005).
+
+In the example above, the server returned the following `links` as part of its result:
+
+<Tabs>
+  <TabItem value="request" label="Request">
+
+```bash
+curl -i -H "Accept:application/vnd.eventstore.atom+json" "http://127.0.0.1:2113/streams/newstream" -u "admin:changeit"
+````
+
+  </TabItem>
+  <TabItem value="response" label="Response">
+
+```json
+HTTP/1.1 200 OK
+Access-Control-Allow-Methods: POST, DELETE, GET, OPTIONS
+Access-Control-Allow-Headers: Content-Type, X-Requested-With, X-Forwarded-Host, X-Forwarded-Prefix, X-PINGOTHER, Authorization, ES-LongPoll, ES-ExpectedVersion, ES-EventId, ES-EventType, ES-RequiresMaster, ES-HardDelete, ES-ResolveLinkTos
+Access-Control-Allow-Origin: *
+Access-Control-Expose-Headers: Location, ES-Position, ES-CurrentVersion
+Cache-Control: max-age=0, no-cache, must-revalidate
+Vary: Accept
+ETag: "0;-2060438500"
+Content-Type: application/vnd.eventstore.atom+json; charset=utf-8
+Server: Mono-HTTPAPI/1.0
+Date: Fri, 15 Dec 2017 12:23:23 GMT
+Content-Length: 1262
+Keep-Alive: timeout=15,max=100
+
+{
+  "title": "Event stream 'newstream'",
+  "id": "http://127.0.0.1:2113/streams/newstream",
+  "updated": "2017-12-15T12:19:32.021776Z",
+  "streamId": "newstream",
+  "author": {
+    "name": "EventStore"
+  },
+  "headOfStream": true,
+  "selfUrl": "http://127.0.0.1:2113/streams/newstream",
+  "eTag": "0;-2060438500",
+  "links": [
+    {
+      "uri": "http://127.0.0.1:2113/streams/newstream",
+      "relation": "self"
+    },
+    {
+      "uri": "http://127.0.0.1:2113/streams/newstream/head/backward/20",
+      "relation": "first"
+    },
+    {
+      "uri": "http://127.0.0.1:2113/streams/newstream/1/forward/20",
+      "relation": "previous"
+    },
+    {
+      "uri": "http://127.0.0.1:2113/streams/newstream/metadata",
+      "relation": "metadata"
+    }
+  ],
+  "entries": [
+    {
+      "title": "0@newstream",
+      "id": "http://127.0.0.1:2113/streams/newstream/0",
+      "updated": "2017-12-15T12:19:32.021776Z",
+      "author": {
+        "name": "EventStore"
+      },
+      "summary": "event-type",
+      "links": [
+        {
+          "uri": "http://127.0.0.1:2113/streams/newstream/0",
+          "relation": "edit"
+        },
+        {
+          "uri": "http://127.0.0.1:2113/streams/newstream/0",
+          "relation": "alternate"
+        }
+      ]
+    }
+  ]
+}
+```
+
+  </TabItem>
+</Tabs>
+
+When dealing with these URLs, there are two ways of reading the data in the stream.
+
+- `GET` the `last` link and move forward in time by following `previous` links.
+- `GET` the `first` link and move backward in time following the `next` links. The final item will not have a `next` link.
+
+Notice in the example response above, there is not a `next` URL because all of the information is in this request and the URL requested is the first link.
+
+If you want to follow a live stream, then you keep following the `previous` links. When you reach the end of a stream, you receive an empty document with no entries or `previous` link. Continue polling this URI, and a new document will appear when an event is appended. You can see this by trying the `previous` link from the above feed.
+
+<Tabs>
+<TabItem value="request" label="Request">
+
+```bash
+curl -i http://127.0.0.1:2113/streams/newstream/1/forward/20 -H "Accept:application/vnd.eventstore.atom+json"
+
+```
+
+</TabItem>
+<TabItem value="response" label="Response">
+
+```json
+HTTP/1.1 200 OK
+Access-Control-Allow-Methods: GET, OPTIONS
+Access-Control-Allow-Headers: Content-Type, X-Requested-With, X-PINGOTHER, Authorization, ES-LongPoll, ES-ExpectedVersion, ES-EventId, ES-EventType, ES-RequiresMaster, ES-HardDelete, ES-ResolveLinkTo, ES-ExpectedVersion
+Access-Control-Allow-Origin: *
+Access-Control-Expose-Headers: Location, ES-Position
+Cache-Control: max-age=0, no-cache, must-revalidate
+Vary: Accept
+ETag: "0;248368668"
+Content-Type: application/vnd.eventstore.atom+json; charset=utf-8
+Server: Mono-HTTPAPI/1.0
+Date: Fri, 13 Mar 2015 14:04:47 GMT
+Content-Length: 795
+Keep-Alive: timeout=15,max=100
+
+{
+  "title": "Event stream 'newstream'",
+  "id": "http://127.0.0.1:2113/streams/newstream",
+  "updated": "0001-01-01T00:00:00Z",
+  "streamId": "newstream",
+  "author": {
+    "name": "EventStore"
+  },
+  "headOfStream": false,
+  "links": [
+    {
+      "uri": "http://127.0.0.1:2113/streams/newstream",
+      "relation": "self"
+    },
+    {
+      "uri": "http://127.0.0.1:2113/streams/newstream/head/backward/20",
+      "relation": "first"
+    },
+    {
+      "uri": "http://127.0.0.1:2113/streams/newstream/0/forward/20",
+      "relation": "last"
+    },
+    {
+      "uri": "http://127.0.0.1:2113/streams/newstream/0/backward/20",
+      "relation": "next"
+    },
+    {
+      "uri": "http://127.0.0.1:2113/streams/newstream/metadata",
+      "relation": "metadata"
+    }
+  ],
+  "entries": \[]
+}
+```
+
+</TabItem>
+</Tabs>
+
+When parsing an atom subscription, the IDs of events always stay the same. This is important for figuring out if you are referring to the same event.
+
+### Paging through events
+
+Now try an example with more than a single page. First, create the multiple events by saving [some sample data](./data/paging-events.json) as a file named `paging-events.json` and making a `POST` request:
+
+<Tabs>
+<TabItem value="request" label="Request">
+
+```bash
+curl -i -d "@paging-events.json" "http://127.0.0.1:2113/streams/alphabet" -H "Content-Type:application/vnd.eventstore.events+json"
+```
+
+</TabItem>
+<TabItem value="response" label="Response">
+
+```json
+HTTP/1.1 100 Continue
+
+HTTP/1.1 201 Created
+Access-Control-Allow-Methods: POST, DELETE, GET, OPTIONS
+Access-Control-Allow-Headers: Content-Type, X-Requested-With, X-Forwarded-Host, X-Forwarded-Prefix, X-PINGOTHER, Authorization, ES-LongPoll, ES-ExpectedVersion, ES-EventId, ES-EventType, ES-RequiresMaster, ES-HardDelete, ES-ResolveLinkTos
+Access-Control-Allow-Origin: *
+Access-Control-Expose-Headers: Location, ES-Position, ES-CurrentVersion
+Location: http://127.0.0.1:2113/streams/alphabet/0
+Content-Type: text/plain; charset=utf-8
+Server: Mono-HTTPAPI/1.0
+Date: Tue, 21 Aug 2018 09:53:46 GMT
+Content-Length: 0
+Keep-Alive: timeout=15,max=100
+```
+
+</TabItem>
+</Tabs>
+
+If you request the stream of events, you see a series of links above the events:
+
+<Tabs>
+<TabItem value="request" label="Request">
+
+```bash
+curl -i http://127.0.0.1:2113/streams/alphabet \
+    -H "Accept:application/vnd.eventstore.atom+json"
+```
+
+</TabItem>
+<TabItem value="response" label="Response">
+
+```json
+HTTP/1.1 200 OK
+Access-Control-Allow-Methods: POST, DELETE, GET, OPTIONS
+Access-Control-Allow-Headers: Content-Type, X-Requested-With, X-Forwarded-Host, X-Forwarded-Prefix, X-PINGOTHER, Authorization, ES-LongPoll, ES-ExpectedVersion, ES-EventId, ES-EventType, ES-RequiresMaster, ES-HardDelete, ES-ResolveLinkTos
+Access-Control-Allow-Origin: *
+Access-Control-Expose-Headers: Location, ES-Position, ES-CurrentVersion
+Cache-Control: max-age=0, no-cache, must-revalidate
+Vary: Accept
+ETag: "26;-2060438500"
+Content-Type: application/vnd.eventstore.atom+json; charset=utf-8
+Server: Mono-HTTPAPI/1.0
+Date: Tue, 21 Aug 2018 10:12:31 GMT
+Content-Length: 10727
+Keep-Alive: timeout=15,max=100
+
+{
+  "title": "Event stream 'alphabet'",
+  "id": "http://127.0.0.1:2113/streams/alphabet",
+  "updated": "2018-08-21T09:53:46.869815Z",
+  "streamId": "alphabet",
+  "author": {
+    "name": "EventStore"
+  },
+  "headOfStream": true,
+  "selfUrl": "http://127.0.0.1:2113/streams/alphabet",
+  "eTag": "26;-2060438500",
+  "links": [
+    {
+      "uri": "http://127.0.0.1:2113/streams/alphabet",
+      "relation": "self"
+    },
+    {
+      "uri": "http://127.0.0.1:2113/streams/alphabet/head/backward/20",
+      "relation": "first"
+    },
+    {
+      "uri": "http://127.0.0.1:2113/streams/alphabet/0/forward/20",
+      "relation": "last"
+    },
+    {
+      "uri": "http://127.0.0.1:2113/streams/alphabet/6/backward/20",
+      "relation": "next"
+    },
+    {
+      "uri": "http://127.0.0.1:2113/streams/alphabet/27/forward/20",
+      "relation": "previous"
+    },
+    {
+      "uri": "http://127.0.0.1:2113/streams/alphabet/metadata",
+      "relation": "metadata"
+    }
+  ],
+  "entries": [
+    {
+      "title": "26@alphabet",
+      "id": "http://127.0.0.1:2113/streams/alphabet/26",
+      "updated": "2018-08-21T09:53:46.869815Z",
+      "author": {
+        "name": "EventStore"
+      },
+      "summary": "event-type",
+      "links": [
+        {
+          "uri": "http://127.0.0.1:2113/streams/alphabet/26",
+          "relation": "edit"
+        },
+        {
+          "uri": "http://127.0.0.1:2113/streams/alphabet/26",
+          "relation": "alternate"
+        }
+      ]
+    },
+    {
+      "title": "25@alphabet",
+      "id": "http://127.0.0.1:2113/streams/alphabet/25",
+      "updated": "2018-08-21T09:53:46.869811Z",
+      "author": {
+        "name": "EventStore"
+      },
+      "summary": "event-type",
+      "links": [
+        {
+          "uri": "http://127.0.0.1:2113/streams/alphabet/25",
+          "relation": "edit"
+        },
+        {
+          "uri": "http://127.0.0.1:2113/streams/alphabet/25",
+          "relation": "alternate"
+        }
+      ]
+    },
+    {
+      "title": "24@alphabet",
+      "id": "http://127.0.0.1:2113/streams/alphabet/24",
+      "updated": "2018-08-21T09:53:46.869809Z",
+      "author": {
+        "name": "EventStore"
+      },
+      "summary": "event-type",
+      "links": [
+        {
+          "uri": "http://127.0.0.1:2113/streams/alphabet/24",
+          "relation": "edit"
+        },
+        {
+          "uri": "http://127.0.0.1:2113/streams/alphabet/24",
+          "relation": "alternate"
+        }
+      ]
+    },
+    {
+      "title": "23@alphabet",
+      "id": "http://127.0.0.1:2113/streams/alphabet/23",
+      "updated": "2018-08-21T09:53:46.869806Z",
+      "author": {
+        "name": "EventStore"
+      },
+      "summary": "event-type",
+      "links": [
+        {
+          "uri": "http://127.0.0.1:2113/streams/alphabet/23",
+          "relation": "edit"
+        },
+        {
+          "uri": "http://127.0.0.1:2113/streams/alphabet/23",
+          "relation": "alternate"
+        }
+      ]
+    },
+    {
+      "title": "22@alphabet",
+      "id": "http://127.0.0.1:2113/streams/alphabet/22",
+      "updated": "2018-08-21T09:53:46.869804Z",
+      "author": {
+        "name": "EventStore"
+      },
+      "summary": "event-type",
+      "links": [
+        {
+          "uri": "http://127.0.0.1:2113/streams/alphabet/22",
+          "relation": "edit"
+        },
+        {
+          "uri": "http://127.0.0.1:2113/streams/alphabet/22",
+          "relation": "alternate"
+        }
+      ]
+    },
+    {
+      "title": "21@alphabet",
+      "id": "http://127.0.0.1:2113/streams/alphabet/21",
+      "updated": "2018-08-21T09:53:46.869802Z",
+      "author": {
+        "name": "EventStore"
+      },
+      "summary": "event-type",
+      "links": [
+        {
+          "uri": "http://127.0.0.1:2113/streams/alphabet/21",
+          "relation": "edit"
+        },
+        {
+          "uri": "http://127.0.0.1:2113/streams/alphabet/21",
+          "relation": "alternate"
+        }
+      ]
+    },
+    {
+      "title": "20@alphabet",
+      "id": "http://127.0.0.1:2113/streams/alphabet/20",
+      "updated": "2018-08-21T09:53:46.869799Z",
+      "author": {
+        "name": "EventStore"
+      },
+      "summary": "event-type",
+      "links": [
+        {
+          "uri": "http://127.0.0.1:2113/streams/alphabet/20",
+          "relation": "edit"
+        },
+        {
+          "uri": "http://127.0.0.1:2113/streams/alphabet/20",
+          "relation": "alternate"
+        }
+      ]
+    },
+    {
+      "title": "19@alphabet",
+      "id": "http://127.0.0.1:2113/streams/alphabet/19",
+      "updated": "2018-08-21T09:53:46.869791Z",
+      "author": {
+        "name": "EventStore"
+      },
+      "summary": "event-type",
+      "links": [
+        {
+          "uri": "http://127.0.0.1:2113/streams/alphabet/19",
+          "relation": "edit"
+        },
+        {
+          "uri": "http://127.0.0.1:2113/streams/alphabet/19",
+          "relation": "alternate"
+        }
+      ]
+    },
+    {
+      "title": "18@alphabet",
+      "id": "http://127.0.0.1:2113/streams/alphabet/18",
+      "updated": "2018-08-21T09:53:46.869788Z",
+      "author": {
+        "name": "EventStore"
+      },
+      "summary": "event-type",
+      "links": [
+        {
+          "uri": "http://127.0.0.1:2113/streams/alphabet/18",
+          "relation": "edit"
+        },
+        {
+          "uri": "http://127.0.0.1:2113/streams/alphabet/18",
+          "relation": "alternate"
+        }
+      ]
+    },
+    {
+      "title": "17@alphabet",
+      "id": "http://127.0.0.1:2113/streams/alphabet/17",
+      "updated": "2018-08-21T09:53:46.869786Z",
+      "author": {
+        "name": "EventStore"
+      },
+      "summary": "event-type",
+      "links": [
+        {
+          "uri": "http://127.0.0.1:2113/streams/alphabet/17",
+          "relation": "edit"
+        },
+        {
+          "uri": "http://127.0.0.1:2113/streams/alphabet/17",
+          "relation": "alternate"
+        }
+      ]
+    },
+    {
+      "title": "16@alphabet",
+      "id": "http://127.0.0.1:2113/streams/alphabet/16",
+      "updated": "2018-08-21T09:53:46.869782Z",
+      "author": {
+        "name": "EventStore"
+      },
+      "summary": "event-type",
+      "links": [
+        {
+          "uri": "http://127.0.0.1:2113/streams/alphabet/16",
+          "relation": "edit"
+        },
+        {
+          "uri": "http://127.0.0.1:2113/streams/alphabet/16",
+          "relation": "alternate"
+        }
+      ]
+    },
+    {
+      "title": "15@alphabet",
+      "id": "http://127.0.0.1:2113/streams/alphabet/15",
+      "updated": "2018-08-21T09:53:46.86978Z",
+      "author": {
+        "name": "EventStore"
+      },
+      "summary": "event-type",
+      "links": [
+        {
+          "uri": "http://127.0.0.1:2113/streams/alphabet/15",
+          "relation": "edit"
+        },
+        {
+          "uri": "http://127.0.0.1:2113/streams/alphabet/15",
+          "relation": "alternate"
+        }
+      ]
+    },
+    {
+      "title": "14@alphabet",
+      "id": "http://127.0.0.1:2113/streams/alphabet/14",
+      "updated": "2018-08-21T09:53:46.869778Z",
+      "author": {
+        "name": "EventStore"
+      },
+      "summary": "event-type",
+      "links": [
+        {
+          "uri": "http://127.0.0.1:2113/streams/alphabet/14",
+          "relation": "edit"
+        },
+        {
+          "uri": "http://127.0.0.1:2113/streams/alphabet/14",
+          "relation": "alternate"
+        }
+      ]
+    },
+    {
+      "title": "13@alphabet",
+      "id": "http://127.0.0.1:2113/streams/alphabet/13",
+      "updated": "2018-08-21T09:53:46.869773Z",
+      "author": {
+        "name": "EventStore"
+      },
+      "summary": "event-type",
+      "links": [
+        {
+          "uri": "http://127.0.0.1:2113/streams/alphabet/13",
+          "relation": "edit"
+        },
+        {
+          "uri": "http://127.0.0.1:2113/streams/alphabet/13",
+          "relation": "alternate"
+        }
+      ]
+    },
+    {
+      "title": "12@alphabet",
+      "id": "http://127.0.0.1:2113/streams/alphabet/12",
+      "updated": "2018-08-21T09:53:46.869771Z",
+      "author": {
+        "name": "EventStore"
+      },
+      "summary": "event-type",
+      "links": [
+        {
+          "uri": "http://127.0.0.1:2113/streams/alphabet/12",
+          "relation": "edit"
+        },
+        {
+          "uri": "http://127.0.0.1:2113/streams/alphabet/12",
+          "relation": "alternate"
+        }
+      ]
+    },
+    {
+      "title": "11@alphabet",
+      "id": "http://127.0.0.1:2113/streams/alphabet/11",
+      "updated": "2018-08-21T09:53:46.869769Z",
+      "author": {
+        "name": "EventStore"
+      },
+      "summary": "event-type",
+      "links": [
+        {
+          "uri": "http://127.0.0.1:2113/streams/alphabet/11",
+          "relation": "edit"
+        },
+        {
+          "uri": "http://127.0.0.1:2113/streams/alphabet/11",
+          "relation": "alternate"
+        }
+      ]
+    },
+    {
+      "title": "10@alphabet",
+      "id": "http://127.0.0.1:2113/streams/alphabet/10",
+      "updated": "2018-08-21T09:53:46.869766Z",
+      "author": {
+        "name": "EventStore"
+      },
+      "summary": "event-type",
+      "links": [
+        {
+          "uri": "http://127.0.0.1:2113/streams/alphabet/10",
+          "relation": "edit"
+        },
+        {
+          "uri": "http://127.0.0.1:2113/streams/alphabet/10",
+          "relation": "alternate"
+        }
+      ]
+    },
+    {
+      "title": "9@alphabet",
+      "id": "http://127.0.0.1:2113/streams/alphabet/9",
+      "updated": "2018-08-21T09:53:46.869764Z",
+      "author": {
+        "name": "EventStore"
+      },
+      "summary": "event-type",
+      "links": [
+        {
+          "uri": "http://127.0.0.1:2113/streams/alphabet/9",
+          "relation": "edit"
+        },
+        {
+          "uri": "http://127.0.0.1:2113/streams/alphabet/9",
+          "relation": "alternate"
+        }
+      ]
+    },
+    {
+      "title": "8@alphabet",
+      "id": "http://127.0.0.1:2113/streams/alphabet/8",
+      "updated": "2018-08-21T09:53:46.86976Z",
+      "author": {
+        "name": "EventStore"
+      },
+      "summary": "event-type",
+      "links": [
+        {
+          "uri": "http://127.0.0.1:2113/streams/alphabet/8",
+          "relation": "edit"
+        },
+        {
+          "uri": "http://127.0.0.1:2113/streams/alphabet/8",
+          "relation": "alternate"
+        }
+      ]
+    },
+    {
+      "title": "7@alphabet",
+      "id": "http://127.0.0.1:2113/streams/alphabet/7",
+      "updated": "2018-08-21T09:53:46.869758Z",
+      "author": {
+        "name": "EventStore"
+      },
+      "summary": "event-type",
+      "links": [
+        {
+          "uri": "http://127.0.0.1:2113/streams/alphabet/7",
+          "relation": "edit"
+        },
+        {
+          "uri": "http://127.0.0.1:2113/streams/alphabet/7",
+          "relation": "alternate"
+        }
+      ]
+    }
+  ]
+}
+```
+
+</TabItem>
+</Tabs>
+
+Using the links in the stream of events, you can traverse all of the events in the stream by going to the `last` URL and following `previous` links, or by following `next` links from the `first` link.
+
+For example, if you request the `last` link from above:
+
+<Tabs>
+<TabItem value="request" label="Request">
+
+```bash
+curl -i http://127.0.0.1:2113/streams/alphabet/0/forward/20 \
+    -H "Accept:application/vnd.eventstore.atom+json"
+```
+
+</TabItem>
+<TabItem value="response" label="Response">
+
+```json
+HTTP/1.1 200 OK
+Access-Control-Allow-Methods: GET, OPTIONS
+Access-Control-Allow-Headers: Content-Type, X-Requested-With, X-Forwarded-Host, X-Forwarded-Prefix, X-PINGOTHER, Authorization, ES-LongPoll, ES-ExpectedVersion, ES-EventId, ES-EventType, ES-RequiresMaster, ES-HardDelete, ES-ResolveLinkTos
+Access-Control-Allow-Origin: *
+Access-Control-Expose-Headers: Location, ES-Position, ES-CurrentVersion
+Cache-Control: max-age=31536000, public
+Vary: Accept
+Content-Type: application/vnd.eventstore.atom+json; charset=utf-8
+Server: Mono-HTTPAPI/1.0
+Date: Tue, 21 Aug 2018 10:24:28 GMT
+Content-Length: 10403
+Keep-Alive: timeout=15,max=100
+
+{
+  "title": "Event stream 'alphabet'",
+  "id": "http://127.0.0.1:2113/streams/alphabet",
+  "updated": "2018-08-21T09:53:46.869716Z",
+  "streamId": "alphabet",
+  "author": {
+    "name": "EventStore"
+  },
+  "headOfStream": false,
+  "links": [
+    {
+      "uri": "http://127.0.0.1:2113/streams/alphabet",
+      "relation": "self"
+    },
+    {
+      "uri": "http://127.0.0.1:2113/streams/alphabet/head/backward/20",
+      "relation": "first"
+    },
+    {
+      "uri": "http://127.0.0.1:2113/streams/alphabet/20/forward/20",
+      "relation": "previous"
+    },
+    {
+      "uri": "http://127.0.0.1:2113/streams/alphabet/metadata",
+      "relation": "metadata"
+    }
+  ],
+  "entries": [
+    {
+      "title": "19@alphabet",
+      "id": "http://127.0.0.1:2113/streams/alphabet/19",
+      "updated": "2018-08-21T09:53:46.869791Z",
+      "author": {
+        "name": "EventStore"
+      },
+      "summary": "event-type",
+      "links": [
+        {
+          "uri": "http://127.0.0.1:2113/streams/alphabet/19",
+          "relation": "edit"
+        },
+        {
+          "uri": "http://127.0.0.1:2113/streams/alphabet/19",
+          "relation": "alternate"
+        }
+      ]
+    },
+    {
+      "title": "18@alphabet",
+      "id": "http://127.0.0.1:2113/streams/alphabet/18",
+      "updated": "2018-08-21T09:53:46.869788Z",
+      "author": {
+        "name": "EventStore"
+      },
+      "summary": "event-type",
+      "links": [
+        {
+          "uri": "http://127.0.0.1:2113/streams/alphabet/18",
+          "relation": "edit"
+        },
+        {
+          "uri": "http://127.0.0.1:2113/streams/alphabet/18",
+          "relation": "alternate"
+        }
+      ]
+    },
+    {
+      "title": "17@alphabet",
+      "id": "http://127.0.0.1:2113/streams/alphabet/17",
+      "updated": "2018-08-21T09:53:46.869786Z",
+      "author": {
+        "name": "EventStore"
+      },
+      "summary": "event-type",
+      "links": [
+        {
+          "uri": "http://127.0.0.1:2113/streams/alphabet/17",
+          "relation": "edit"
+        },
+        {
+          "uri": "http://127.0.0.1:2113/streams/alphabet/17",
+          "relation": "alternate"
+        }
+      ]
+    },
+    {
+      "title": "16@alphabet",
+      "id": "http://127.0.0.1:2113/streams/alphabet/16",
+      "updated": "2018-08-21T09:53:46.869782Z",
+      "author": {
+        "name": "EventStore"
+      },
+      "summary": "event-type",
+      "links": [
+        {
+          "uri": "http://127.0.0.1:2113/streams/alphabet/16",
+          "relation": "edit"
+        },
+        {
+          "uri": "http://127.0.0.1:2113/streams/alphabet/16",
+          "relation": "alternate"
+        }
+      ]
+    },
+    {
+      "title": "15@alphabet",
+      "id": "http://127.0.0.1:2113/streams/alphabet/15",
+      "updated": "2018-08-21T09:53:46.86978Z",
+      "author": {
+        "name": "EventStore"
+      },
+      "summary": "event-type",
+      "links": [
+        {
+          "uri": "http://127.0.0.1:2113/streams/alphabet/15",
+          "relation": "edit"
+        },
+        {
+          "uri": "http://127.0.0.1:2113/streams/alphabet/15",
+          "relation": "alternate"
+        }
+      ]
+    },
+    {
+      "title": "14@alphabet",
+      "id": "http://127.0.0.1:2113/streams/alphabet/14",
+      "updated": "2018-08-21T09:53:46.869778Z",
+      "author": {
+        "name": "EventStore"
+      },
+      "summary": "event-type",
+      "links": [
+        {
+          "uri": "http://127.0.0.1:2113/streams/alphabet/14",
+          "relation": "edit"
+        },
+        {
+          "uri": "http://127.0.0.1:2113/streams/alphabet/14",
+          "relation": "alternate"
+        }
+      ]
+    },
+    {
+      "title": "13@alphabet",
+      "id": "http://127.0.0.1:2113/streams/alphabet/13",
+      "updated": "2018-08-21T09:53:46.869773Z",
+      "author": {
+        "name": "EventStore"
+      },
+      "summary": "event-type",
+      "links": [
+        {
+          "uri": "http://127.0.0.1:2113/streams/alphabet/13",
+          "relation": "edit"
+        },
+        {
+          "uri": "http://127.0.0.1:2113/streams/alphabet/13",
+          "relation": "alternate"
+        }
+      ]
+    },
+    {
+      "title": "12@alphabet",
+      "id": "http://127.0.0.1:2113/streams/alphabet/12",
+      "updated": "2018-08-21T09:53:46.869771Z",
+      "author": {
+        "name": "EventStore"
+      },
+      "summary": "event-type",
+      "links": [
+        {
+          "uri": "http://127.0.0.1:2113/streams/alphabet/12",
+          "relation": "edit"
+        },
+        {
+          "uri": "http://127.0.0.1:2113/streams/alphabet/12",
+          "relation": "alternate"
+        }
+      ]
+    },
+    {
+      "title": "11@alphabet",
+      "id": "http://127.0.0.1:2113/streams/alphabet/11",
+      "updated": "2018-08-21T09:53:46.869769Z",
+      "author": {
+        "name": "EventStore"
+      },
+      "summary": "event-type",
+      "links": [
+        {
+          "uri": "http://127.0.0.1:2113/streams/alphabet/11",
+          "relation": "edit"
+        },
+        {
+          "uri": "http://127.0.0.1:2113/streams/alphabet/11",
+          "relation": "alternate"
+        }
+      ]
+    },
+    {
+      "title": "10@alphabet",
+      "id": "http://127.0.0.1:2113/streams/alphabet/10",
+      "updated": "2018-08-21T09:53:46.869766Z",
+      "author": {
+        "name": "EventStore"
+      },
+      "summary": "event-type",
+      "links": [
+        {
+          "uri": "http://127.0.0.1:2113/streams/alphabet/10",
+          "relation": "edit"
+        },
+        {
+          "uri": "http://127.0.0.1:2113/streams/alphabet/10",
+          "relation": "alternate"
+        }
+      ]
+    },
+    {
+      "title": "9@alphabet",
+      "id": "http://127.0.0.1:2113/streams/alphabet/9",
+      "updated": "2018-08-21T09:53:46.869764Z",
+      "author": {
+        "name": "EventStore"
+      },
+      "summary": "event-type",
+      "links": [
+        {
+          "uri": "http://127.0.0.1:2113/streams/alphabet/9",
+          "relation": "edit"
+        },
+        {
+          "uri": "http://127.0.0.1:2113/streams/alphabet/9",
+          "relation": "alternate"
+        }
+      ]
+    },
+    {
+      "title": "8@alphabet",
+      "id": "http://127.0.0.1:2113/streams/alphabet/8",
+      "updated": "2018-08-21T09:53:46.86976Z",
+      "author": {
+        "name": "EventStore"
+      },
+      "summary": "event-type",
+      "links": [
+        {
+          "uri": "http://127.0.0.1:2113/streams/alphabet/8",
+          "relation": "edit"
+        },
+        {
+          "uri": "http://127.0.0.1:2113/streams/alphabet/8",
+          "relation": "alternate"
+        }
+      ]
+    },
+    {
+      "title": "7@alphabet",
+      "id": "http://127.0.0.1:2113/streams/alphabet/7",
+      "updated": "2018-08-21T09:53:46.869758Z",
+      "author": {
+        "name": "EventStore"
+      },
+      "summary": "event-type",
+      "links": [
+        {
+          "uri": "http://127.0.0.1:2113/streams/alphabet/7",
+          "relation": "edit"
+        },
+        {
+          "uri": "http://127.0.0.1:2113/streams/alphabet/7",
+          "relation": "alternate"
+        }
+      ]
+    },
+    {
+      "title": "6@alphabet",
+      "id": "http://127.0.0.1:2113/streams/alphabet/6",
+      "updated": "2018-08-21T09:53:46.869755Z",
+      "author": {
+        "name": "EventStore"
+      },
+      "summary": "event-type",
+      "links": [
+        {
+          "uri": "http://127.0.0.1:2113/streams/alphabet/6",
+          "relation": "edit"
+        },
+        {
+          "uri": "http://127.0.0.1:2113/streams/alphabet/6",
+          "relation": "alternate"
+        }
+      ]
+    },
+    {
+      "title": "5@alphabet",
+      "id": "http://127.0.0.1:2113/streams/alphabet/5",
+      "updated": "2018-08-21T09:53:46.869753Z",
+      "author": {
+        "name": "EventStore"
+      },
+      "summary": "event-type",
+      "links": [
+        {
+          "uri": "http://127.0.0.1:2113/streams/alphabet/5",
+          "relation": "edit"
+        },
+        {
+          "uri": "http://127.0.0.1:2113/streams/alphabet/5",
+          "relation": "alternate"
+        }
+      ]
+    },
+    {
+      "title": "4@alphabet",
+      "id": "http://127.0.0.1:2113/streams/alphabet/4",
+      "updated": "2018-08-21T09:53:46.86975Z",
+      "author": {
+        "name": "EventStore"
+      },
+      "summary": "event-type",
+      "links": [
+        {
+          "uri": "http://127.0.0.1:2113/streams/alphabet/4",
+          "relation": "edit"
+        },
+        {
+          "uri": "http://127.0.0.1:2113/streams/alphabet/4",
+          "relation": "alternate"
+        }
+      ]
+    },
+    {
+      "title": "3@alphabet",
+      "id": "http://127.0.0.1:2113/streams/alphabet/3",
+      "updated": "2018-08-21T09:53:46.869748Z",
+      "author": {
+        "name": "EventStore"
+      },
+      "summary": "event-type",
+      "links": [
+        {
+          "uri": "http://127.0.0.1:2113/streams/alphabet/3",
+          "relation": "edit"
+        },
+        {
+          "uri": "http://127.0.0.1:2113/streams/alphabet/3",
+          "relation": "alternate"
+        }
+      ]
+    },
+    {
+      "title": "2@alphabet",
+      "id": "http://127.0.0.1:2113/streams/alphabet/2",
+      "updated": "2018-08-21T09:53:46.869746Z",
+      "author": {
+        "name": "EventStore"
+      },
+      "summary": "event-type",
+      "links": [
+        {
+          "uri": "http://127.0.0.1:2113/streams/alphabet/2",
+          "relation": "edit"
+        },
+        {
+          "uri": "http://127.0.0.1:2113/streams/alphabet/2",
+          "relation": "alternate"
+        }
+      ]
+    },
+    {
+      "title": "1@alphabet",
+      "id": "http://127.0.0.1:2113/streams/alphabet/1",
+      "updated": "2018-08-21T09:53:46.869742Z",
+      "author": {
+        "name": "EventStore"
+      },
+      "summary": "event-type",
+      "links": [
+        {
+          "uri": "http://127.0.0.1:2113/streams/alphabet/1",
+          "relation": "edit"
+        },
+        {
+          "uri": "http://127.0.0.1:2113/streams/alphabet/1",
+          "relation": "alternate"
+        }
+      ]
+    },
+    {
+      "title": "0@alphabet",
+      "id": "http://127.0.0.1:2113/streams/alphabet/0",
+      "updated": "2018-08-21T09:53:46.869716Z",
+      "author": {
+        "name": "EventStore"
+      },
+      "summary": "event-type",
+      "links": [
+        {
+          "uri": "http://127.0.0.1:2113/streams/alphabet/0",
+          "relation": "edit"
+        },
+        {
+          "uri": "http://127.0.0.1:2113/streams/alphabet/0",
+          "relation": "alternate"
+        }
+      ]
+    }
+  ]
+}
+```
+
+</TabItem>
+</Tabs>
+
+You then follow `previous` links until you are back to the head of the stream, where you can continue reading events in real time by polling the `previous` link.
+
+:::tip Saving links
+All links except the head link are fully cacheable as you can see in the HTTP header `Cache-Control: max-age=31536000, public`. This is important when discussing intermediaries and performance as you commonly replay a stream from storage. You should **never** bookmark links aside from the head of the stream resource, and always follow links. We may in the future change how internal links work, and bookmarking links other than the head may break.
+:::
+
+### Reading all events
+
+`$all` is a special paged stream for all events. You can use the same paged form of reading described above to read all events for a node by pointing the stream at _/streams/\$all_. As it's a stream like any other, you can perform all operations, except posting to it.
+
+:::tip
+To access the `$all` stream, you must use admin details. Find more information on the [security](security.mdx) page.
+:::
+
+<Tabs>
+<TabItem value="request" label="Request">
+
+```bash
+curl -i http://127.0.0.1:2113/streams/%24all \
+    -H "Accept:application/vnd.eventstore.atom+json" -u admin:changeit
+```
+
+</TabItem>
+<TabItem value="response" label="Response">
+
+```json
+HTTP/1.1 200 OK
+Access-Control-Allow-Methods: POST, DELETE, GET, GET, OPTIONS
+Access-Control-Allow-Headers: Content-Type, X-Requested-With, X-PINGOTHER, Authorization, ES-LongPoll, ES-ExpectedVersion, ES-EventId, ES-EventType, ES-RequiresMaster, ES-HardDelete, ES-ResolveLinkTo, ES-ExpectedVersion
+Access-Control-Allow-Origin: *
+Access-Control-Expose-Headers: Location, ES-Position
+Cache-Control: max-age=0, no-cache, must-revalidate
+Vary: Accept
+ETag: "25159393;248368668"
+Content-Type: application/vnd.eventstore.atom+json; charset=utf-8
+Server: Mono-HTTPAPI/1.0
+Date: Fri, 13 Mar 2015 16:19:09 GMT
+Content-Length: 12157
+Keep-Alive: timeout=15,max=100
+
+{
+  "title": "All events",
+  "id": "http://127.0.0.1:2113/streams/%24all",
+  "updated": "2015-03-13T16:19:06.548415Z",
+  "author": {
+    "name": "EventStore"
+  },
+  "headOfStream": false,
+  "links": [
+    {
+      "uri": "http://127.0.0.1:2113/streams/%24all",
+      "relation": "self"
+    },
+    {
+      "uri": "http://127.0.0.1:2113/streams/%24all/head/backward/20",
+      "relation": "first"
+    },
+    {
+      "uri": "http://127.0.0.1:2113/streams/%24all/00000000000000000000000000000000/forward/20",
+      "relation": "last"
+    },
+    {
+      "uri": "http://127.0.0.1:2113/streams/%24all/00000000017BC0D000000000017BC0D0/backward/20",
+      "relation": "next"
+    },
+    {
+      "uri": "http://127.0.0.1:2113/streams/%24all/0000000001801EBF0000000001801EBF/forward/20",
+      "relation": "previous"
+    },
+    {
+      "uri": "http://127.0.0.1:2113/streams/%24all/metadata",
+      "relation": "metadata"
+    }
+  ],
+  "entries": []
+}
+```
+
+</TabItem>
+</Tabs>
+
+### Conditional GETs
+
+The head link supports conditional `GET`s with the use of [ETAGS](http://en.wikipedia.org/wiki/HTTP_ETag), a well-known HTTP construct. You can include the ETAG of your last request and issue a conditional `GET` to the server. If nothing has changed, it won't return the full feed. For example the earlier response has an ETAG:
+
+```
+HTTP/1.1 200 OK
+Access-Control-Allow-Methods: POST, DELETE, GET, OPTIONS
+Access-Control-Allow-Headers: Content-Type, X-Requested-With, X-Forwarded-Host, X-Forwarded-Prefix, X-PINGOTHER, Authorization, ES-LongPoll, ES-ExpectedVersion, ES-EventId, ES-EventType, ES-RequiresMaster, ES-HardDelete, ES-ResolveLinkTos
+Access-Control-Allow-Origin: *
+Access-Control-Expose-Headers: Location, ES-Position, ES-CurrentVersion
+Cache-Control: max-age=0, no-cache, must-revalidate
+Vary: Accept
+ETag: "26;-2060438500"
+Content-Type: application/vnd.eventstore.atom+json; charset=utf-8
+Server: Mono-HTTPAPI/1.0
+Date: Tue, 21 Aug 2018 10:12:31 GMT
+Content-Length: 10727
+Keep-Alive: timeout=15,max=100
+```
+
+You can use this in your next request when polling the stream for changes by putting it in the `If-None-Match` header. This tells the server to check if the response is the one you already know and return a '304 not modified' response. If the tags have changed, the server returns a '200 OK' response. You can use this method to optimize your application by not sending large streams if there are no changes.
+
+<Tabs>
+<TabItem value="request" label="Request">
+
+```bash
+curl -i http://127.0.0.1:2113/streams/alphabet \
+    -H "Accept:application/vnd.eventstore.atom+json" \
+    -H "If-None-Match:26;-2060438500"
+```
+
+</TabItem>
+<TabItem value="response" label="Response">
+
+```
+HTTP/1.1 304 Not Modified
+Access-Control-Allow-Methods: POST, DELETE, GET, OPTIONS
+Access-Control-Allow-Headers: Content-Type, X-Requested-With, X-Forwarded-Host, X-Forwarded-Prefix, X-PINGOTHER, Authorization, ES-LongPoll, ES-ExpectedVersion, ES-EventId, ES-EventType, ES-RequiresMaster, ES-HardDelete, ES-ResolveLinkTos
+Access-Control-Allow-Origin: *
+Access-Control-Expose-Headers: Location, ES-Position, ES-CurrentVersion
+Content-Type: text/plain; charset=utf-8
+Server: Mono-HTTPAPI/1.0
+Date: Tue, 21 Aug 2018 12:07:35 GMT
+Content-Length: 0
+Keep-Alive: timeout=15,max=100
+```
+
+</TabItem>
+</Tabs>
+
+:::tip
+Etags are created using the version of the stream and the current media type of the stream you are reading. You can't read an Etag from a stream in one media type and use it with another media type.
+:::
+
+### Embedding data into streams in JSON format
+
+So far in this guide, the feeds returned have contained links that refer to the actual event data. This is normally a preferable mechanism for several reasons:
+
+- They can be in a different media type than the feed, and you can negotiate them separately from the feed itself (for example, the feed in JSON and the event in XML). You can cache the event data separately from the feed, and you can point it to different feeds. If you use a `linkTo()` in your [projection](projections.md), this is what happens in your atom feeds.
+- If you are using JSON, you can embed the events into the atom feed events. This can help cut down on the number of requests in some situations, but the messages are larger.
+
+There are ways of embedding events and further metadata into your stream by using the `embed` parameter.
+
+#### Rich embed mode
+
+The `rich` embed mode returns additional properties about the event:
+
+- `eventId`
+- `eventType`
+- `eventNumber`
+- `streamId`
+- `isJson`
+- `isMetaData`
+- `isLinkMetaData`
+- `positionEventNumber`
+- `positionStreamId`
+- `updated`
+
+<Tabs>
+<TabItem value="request" label="Request">
+
+```bash
+curl -i -H "Accept:application/vnd.eventstore.atom+json" \
+    "http://127.0.0.1:2113/streams/newstream?embed=rich"
+```
+
+</TabItem>
+<TabItem value="response" label="Response">
+
+```json
+HTTP/1.1 200 OK
+Access-Control-Allow-Methods: POST, DELETE, GET, OPTIONS
+Access-Control-Allow-Headers: Content-Type, X-Requested-With, X-PINGOTHER, Authorization, ES-LongPoll, ES-ExpectedVersion, ES-EventId, ES-EventType, ES-RequiresMaster, ES-HardDelete, ES-ResolveLinkTo, ES-ExpectedVersion
+Access-Control-Allow-Origin: *
+Access-Control-Expose-Headers: Location, ES-Position
+Cache-Control: max-age=0, no-cache, must-revalidate
+Vary: Accept
+ETag: "0;248368668"
+Content-Type: application/vnd.eventstore.atom+json; charset=utf-8
+Server: Mono-HTTPAPI/1.0
+Date: Fri, 13 Mar 2015 16:30:57 GMT
+Content-Length: 1570
+Keep-Alive: timeout=15,max=100
+
+{
+  "title": "Event stream 'newstream'",
+  "id": "http://127.0.0.1:2113/streams/newstream",
+  "updated": "2015-03-13T12:13:42.492473Z",
+  "streamId": "newstream",
+  "author": {
+    "name": "EventStore"},
+  "headOfStream": true,
+  "selfUrl": "http://127.0.0.1:2113/streams/newstream",
+  "eTag": "0;248368668",
+  "links": [
+    {
+      "uri": "http://127.0.0.1:2113/streams/newstream",
+      "relation": "self"
+    },
+    {
+      "uri": "http://127.0.0.1:2113/streams/newstream/head/backward/20",
+      "relation": "first"
+    },
+    {
+      "uri": "http://127.0.0.1:2113/streams/newstream/1/forward/20",
+      "relation": "previous"
+    },
+    {
+      "uri": "http://127.0.0.1:2113/streams/newstream/metadata",
+      "relation": "metadata"
+    }
+  ],
+  "entries": [
+    {
+      "eventId": "fbf4a1a1-b4a3-4dfe-a01f-ec52c34e16e4",
+      "eventType": "event-type",
+      "eventNumber": 0,
+      "streamId": "newstream",
+      "isJson": true,
+      "isMetaData": false,
+      "isLinkMetaData": false,
+      "positionEventNumber": 0,
+      "positionStreamId": "newstream",
+      "title": "0@newstream",
+      "id": "http://127.0.0.1:2113/streams/newstream/0",
+      "updated": "2015-03-13T12:13:42.492473Z",
+      "author": {
+        "name": "EventStore"},
+      "summary": "event-type",
+      "links": [
+        {
+          "uri": "http://127.0.0.1:2113/streams/newstream/0",
+          "relation": "edit"
+        },
+        {
+          "uri": "http://127.0.0.1:2113/streams/newstream/0",
+          "relation": "alternate"
+        }
+      ]
+	}
+  ]
+}
+```
+
+</TabItem>
+</Tabs>
+
+#### Body embed mode
+
+The `body` embed mode returns the JSON/XML body of the events into the feed as well, depending on the type of the feed. Note the additional `data` property of the request below:
+
+<Tabs>
+<TabItem value="request" label="Request">
+
+```bash
+curl -i -H "Accept:application/vnd.eventstore.atom+json" \
+    "http://127.0.0.1:2113/streams/newstream?embed=body"
+```
+
+</TabItem>
+<TabItem value="response" label="Response">
+
+```json
+HTTP/1.1 200 OK
+Access-Control-Allow-Methods: POST, DELETE, GET, OPTIONS
+Access-Control-Allow-Headers: Content-Type, X-Requested-With, X-PINGOTHER, Authorization, ES-LongPoll, ES-ExpectedVersion, ES-EventId, ES-EventType, ES-RequiresMaster, ES-HardDelete, ES-ResolveLinkTo, ES-ExpectedVersion
+Access-Control-Allow-Origin: *
+Access-Control-Expose-Headers: Location, ES-Position
+Cache-Control: max-age=0, no-cache, must-revalidate
+Vary: Accept
+ETag: "0;248368668"
+Content-Type: application/vnd.eventstore.atom+json; charset=utf-8
+Server: Mono-HTTPAPI/1.0
+Date: Fri, 13 Mar 2015 16:32:06 GMT
+Content-Length: 1608
+Keep-Alive: timeout=15,max=100
+
+{
+  "title": "Event stream 'newstream'",
+  "id": "http://127.0.0.1:2113/streams/newstream",
+  "updated": "2015-03-13T12:13:42.492473Z",
+  "streamId": "newstream",
+  "author": {
+    "name": "EventStore"
+  },
+  "headOfStream": true,
+  "selfUrl": "http://127.0.0.1:2113/streams/newstream",
+  "eTag": "0;248368668",
+  "links": [
+    {
+      "uri": "http://127.0.0.1:2113/streams/newstream",
+      "relation": "self"
+    },
+    {
+      "uri": "http://127.0.0.1:2113/streams/newstream/head/backward/20",
+      "relation": "first"
+    },
+    {
+      "uri": "http://127.0.0.1:2113/streams/newstream/1/forward/20",
+      "relation": "previous"
+    },
+    {
+      "uri": "http://127.0.0.1:2113/streams/newstream/metadata",
+      "relation": "metadata"
+    }
+  ],
+  "entries": [
+    {
+      "eventId": "fbf4a1a1-b4a3-4dfe-a01f-ec52c34e16e4",
+      "eventType": "event-type",
+      "eventNumber": 0,
+      "data": "{'a': '1'}",
+      "streamId": "newstream",
+      "isJson": true,
+      "isMetaData": false,
+      "isLinkMetaData": false,
+      "positionEventNumber": 0,
+      "positionStreamId": "newstream",
+      "title": "0@newstream",
+      "id": "http://127.0.0.1:2113/streams/newstream/0",
+      "updated": "2015-03-13T12:13:42.492473Z",
+      "author": {
+        "name": "EventStore"
+      },
+      "summary": "event-type",
+      "links": [
+        {
+          "uri": "http://127.0.0.1:2113/streams/newstream/0",
+          "relation": "edit"
+        },
+        {
+          "uri": "http://127.0.0.1:2113/streams/newstream/0",
+          "relation": "alternate"
+        }
+      ]
+    }
+  ]
+}
+```
+
+</TabItem>
+</Tabs>
+
+## Deleting a stream
+
+### Soft deleting
+
+To delete a stream, issue a `DELETE` request to the resource.
+
+<Tabs>
+  <TabItem value="request" label="Request">
+    
+```bash
+curl -X DELETE "http://127.0.0.1:2113/streams/newstream"
+```
+
+  </TabItem>
+  <TabItem value="response" label="Response">
+
+```
+HTTP/1.1 204 Stream deleted
+Access-Control-Allow-Methods: POST, DELETE, GET, OPTIONS
+Access-Control-Allow-Headers: Content-Type, X-Requested-With, X-Forwarded-Host, X-Forwarded-Prefix, X-PINGOTHER, Authorization, ES-LongPoll, ES-ExpectedVersion, ES-EventId, ES-EventType, ES-RequiresMaster, ES-HardDelete, ES-ResolveLinkTos
+Access-Control-Allow-Origin: *
+Access-Control-Expose-Headers: Location, ES-Position, ES-CurrentVersion
+Content-Type: text/plain; charset=utf-8
+Server: Mono-HTTPAPI/1.0
+Date: Fri, 27 Jul 2018 11:51:02 GMT
+Content-Length: 0
+Connection: close
+```
+
+  </TabItem>
+</Tabs>
+
+By default when you delete a stream, EventStoreDB soft deletes it. This means you can recreate it later if necessary. If you try to `GET` a soft deleted stream you receive a 404 response:
+
+<Tabs>
+  <TabItem value="request" label="Request">
+
+```bash
+curl -X GET "http://127.0.0.1:2113/streams/newstream" \
+    -H 'Accept: application/vnd.eventstore.events+json'
+
+```
+
+  </TabItem>
+  <TabItem value="response" label="Response">
+
+```
+HTTP/1.1 410 Deleted
+Access-Control-Allow-Methods: POST, DELETE, GET, OPTIONS
+Access-Control-Allow-Headers: Content-Type, X-Requested-With, X-Forwarded-Host, X-Forwarded-Prefix, X-PINGOTHER, Authorization, ES-LongPoll, ES-ExpectedVersion, ES-EventId, ES-EventType, ES-RequiresMaster, ES-HardDelete, ES-ResolveLinkTos
+Access-Control-Allow-Origin: *
+Access-Control-Expose-Headers: Location, ES-Position, ES-CurrentVersion
+Content-Type: text/plain; charset=utf-8
+Server: Mono-HTTPAPI/1.0
+Date: Fri, 27 Jul 2018 12:04:10 GMT
+Content-Length: 0
+Connection: close
+```
+
+  </TabItem>
+</Tabs>
+
+You can recreate the stream by appending new events to it just as we created a new stream:
+
+<Tabs>
+  <TabItem value="request" label="Request">
+
+```bash
+curl -i -d "@event.json" "http://127.0.0.1:2113/streams/newstream" \
+    -H "Content-Type:application/vnd.eventstore.events+json"
+    -u "admin:changeit"
+```
+
+  </TabItem>
+  <TabItem value="response" label="Response">
+
+```
+HTTP/1.1 201 Created
+Access-Control-Allow-Methods: POST, DELETE, GET, OPTIONS
+Access-Control-Allow-Headers: Content-Type, X-Requested-With, X-PINGOTHER
+Access-Control-Allow-Origin: *
+Location: http://127.0.0.1:2113/streams/newstream/1
+Content-Type: text/plain; charset: utf-8
+Server: Mono-HTTPAPI/1.0
+Date: Fri, 28 Jun 2013 12:32:18 GMT
+Content-Length: 0
+Keep-Alive: timeout=15,max=100
+```
+
+  </TabItem>
+</Tabs>
+
+The event numbers do not start at zero, but from the point where you soft deleted the stream. A `GET` request will return just the new event, not events before the soft delete.
+
+### Hard deleting
+
+You can hard delete a stream. To issue a permanent delete use the `ES-HardDelete` header.
+
+:::warning
+A hard delete is permanent and the stream is not removed during a scavenge. If you hard delete a stream, you cannot recreate the stream.
+:::
+
+Issue the `DELETE` as before but with the permanent delete header:
+
+<Tabs>
+  <TabItem value="request" label="Request">
+
+```bash
+curl -X DELETE http://127.0.0.1:2113/streams/newstream -H "ES-HardDelete:true"
+```
+
+  </TabItem>
+  <TabItem value="response" label="Response">
+
+```
+HTTP/1.1 204 Stream deleted
+Content-Length: 0
+Content-Type: text/plain; charset=utf-8
+Server: Microsoft-HTTPAPI/2.0
+Access-Control-Allow-Methods: POST, DELETE, GET, OPTIONS
+Access-Control-Allow-Headers: Content-Type, X-Requested-With, X-PINGOTHER, Authorization
+Access-Control-Allow-Origin: *
+Access-Control-Expose-Headers: Location
+Date: Thu, 13 Mar 2014 20:56:55 GMT
+```
+
+  </TabItem>
+</Tabs>
+
+The stream is now permanently deleted, and now the response to a `GET` request is a `410`.
+
+<Tabs>
+  <TabItem value="request" label="Request">
+
+```bash
+curl -X GET "http://127.0.0.1:2113/streams/newstream" \
+    -H 'Accept: application/vnd.eventstore.events+json'
+```
+
+  </TabItem>
+  <TabItem value="response" label="Response">
+
+```
+HTTP/1.1 410 Deleted
+Access-Control-Allow-Methods: POST, DELETE, GET, OPTIONS
+Access-Control-Allow-Headers: Content-Type, X-Requested-With, X-Forwarded-Host, X-Forwarded-Prefix, X-PINGOTHER, Authorization, ES-LongPoll, ES-ExpectedVersion, ES-EventId, ES-EventType, ES-RequiresMaster, ES-HardDelete, ES-ResolveLinkTos
+Access-Control-Allow-Origin: *
+Access-Control-Expose-Headers: Location, ES-Position, ES-CurrentVersion
+Content-Type: text/plain; charset=utf-8
+Server: Mono-HTTPAPI/1.0
+Date: Fri, 27 Jul 2018 12:04:10 GMT
+Content-Length: 0
+Connection: close
+```
+
+  </TabItem>
+</Tabs>
+
+If you try to recreate the stream as in the above example, you also receive a `410` response.
+
+<Tabs>
+  <TabItem value="request" label="Request">
+
+```bash
+curl -i -d "@event-append.json" "http://127.0.0.1:2113/streams/newstream" \
+    -H "Content-Type:application/vnd.eventstore.events+json" \
+    -H "ES-EventType: SomeEvent"
+```
+
+  </TabItem>
+  <TabItem value="response" label="Response">
+
+```
+HTTP/1.1 410 Deleted
+Access-Control-Allow-Methods: POST, DELETE, GET, OPTIONS
+Access-Control-Allow-Headers: Content-Type, X-Requested-With, X-PINGOTHER
+Access-Control-Allow-Origin: *
+Location: http://127.0.0.1:2113/streams/newstream/1
+Content-Type: text/plain; charset: utf-8
+Server: Mono-HTTPAPI/1.0
+Date: Fri, 28 Jun 2013 12:32:18 GMT
+Content-Length: 0
+Keep-Alive: timeout=15,max=100
+```
+
+  </TabItem>
+</Tabs>
+
+## Description document
+
+With the addition of Competing Consumers, which is another way of reading streams, the need arose to expose information on supported methods and content types to consumers. This is provided by a description document, which has a couple benefits:
+
+- Clients can rely on the keys (`streams` and `streamSubscription` in particular) in the description document to remain unchanged across versions of EventStoreDB and you can rely on it as a lookup for the particular method of reading a stream.
+- Allows the restructuring of URIs underneath without breaking clients. e.g., `/streams/newstream` -> `/streams/newstream/atom`.
+
+### Fetching the description document
+
+There are three scenarios in which EventStoreDB returns the description document.
+
+- Attempting to read a stream with an invalid media type.
+- Attempting to read a stream with no accept header.
+- Requesting the description document explicitly.
+
+The client is able to request the description document by passing `application/vnd.eventstore.streamdesc+json` in the `accept` header, for example:
+
+<Tabs>
+  <TabItem value="request" label="Request">
+
+```bash
+curl -i http://localhost:2113/streams/newstream \
+    -H "accept:application/vnd.eventstore.streamdesc+json"
+```
+
+  </TabItem>
+  <TabItem value="response" label="Response">
+
+```json
+HTTP/1.1 200 Description Document
+Access-Control-Allow-Methods: POST, DELETE, GET, OPTIONS
+Access-Control-Allow-Headers: Content-Type, X-Requested-With, X-Forwarded-Host, X-Forwarded-Prefix, X-PINGOTHER, Authorization, ES-LongPoll, ES-ExpectedVersion, ES-EventId, ES-EventType, ES-RequiresMaster, ES-HardDelete, ES-ResolveLinkTos
+Access-Control-Allow-Origin: *
+Access-Control-Expose-Headers: Location, ES-Position, ES-CurrentVersion
+Content-Type: application/vnd.eventstore.streamdesc+json; charset=utf-8
+Server: Mono-HTTPAPI/1.0
+Date: Thu, 23 Aug 2018 12:37:18 GMT
+Content-Length: 517
+Keep-Alive: timeout=15,max=100
+
+{
+  "title": "Description document for 'newstream'",
+  "description": "The description document will be presented when no accept header is present or it was requested",
+  "_links": {
+    "self": {
+      "href": "/streams/newstream",
+      "supportedContentTypes": [
+        "application/vnd.eventstore.streamdesc+json"
+      ]
+    },
+    "stream": {
+      "href": "/streams/newstream",
+      "supportedContentTypes": [
+        "application/atom+xml",
+        "application/vnd.eventstore.atom+json"
+      ]
+    },
+	"streamSubscription": null
+  }
+}
+```
+
+  </TabItem>
+</Tabs>
+
+In the example above, the client requested the description document for the stream called `newstream` which has a set of links describing the supported methods and content types. The document also includes additional methods available such as the `streamSubscription`. If there are no subscriptions to the `newstream`, the `streamSubscription` value is `null`.
+
+## Optimistic concurrency and idempotence
+
+### Idempotence
+
+All operations on the HTTP interface are idempotent (unless the [expected version](#expected-version-header) is ignored). It is the responsibility of the client to retry operations under failure conditions, ensuring that the event IDs of the events and version number posted are the same as the first attempt.
+
+Provided the client maintains this, EventStoreDB will treat all operations as idempotent.
+
+For example:
+
+<Tabs>
+<TabItem value="request" label="Request">
+
+```bash
+curl -i -d @event.json "http://127.0.0.1:2113/streams/newstream444"
+```
+
+</TabItem>
+<TabItem value="response" label="Response">
+
+```http
+HTTP/1.1 201 Created
+Access-Control-Allow-Origin: *
+Access-Control-Allow-Methods: POST, GET, PUT, DELETE
+Location: http://127.0.0.1:2113/streams/newstream444/0
+Content-Type: application/json
+Server: Mono-HTTPAPI/1.0
+Date: Thu, 06 Sep 2023 19:49:37 GMT
+Content-Length: 107
+Keep-Alive: timeout=15,max=100
+```
+
+</TabItem>
+</Tabs>
+
+Assuming you were posting to a new stream, the is created and the event is appended once. The stream version is now `0`. Appending another event with a unique ID will return stream version `1`. Resending the request with the same event ID and the `ES-ExpectedVersion:0` header returns the same 201 http response as the first but does not write again. This allows the client rule of “if you get an unknown condition, retry” to work.
+
+<!-- TODO: track down whether this is a bug to be fixed. This scenario only works if `ES-ExpectedVersion:0`. Shouldn't it work with `ES-ExpectedVersion:1` instead? -->
+
+For example, send the following request to a stream with 3 events:
+
+<Tabs>
+<TabItem value="request" label="Request">
+
+```bash
+curl -i -d @event.json "http://127.0.0.1:2113/streams/newstream444" -H "Content-Type:application/vnd.eventstore.events+json" -H "ES-ExpectedVersion:1
+```
+
+</TabItem>
+<TabItem value="response" label="Response">
+
+```json
+HTTP/1.1 200 OK
+Access-Control-Allow-Origin: *
+Access-Control-Allow-Methods: POST, GET, PUT, DELETE
+Content-Type: application/json
+Server: Mono-HTTPAPI/1.0
+Date: Thu, 06 Sep 2012 19:50:30 GMT
+Content-Length: 2131
+Keep-Alive: timeout=15,max=100
+
+{
+	"title": "Event stream 'newstream444'",
+	"id": "http://127.0.0.1:2113/streams/newstream444",
+	"updated": "2012-09-06T16:39:44.695643Z",
+	"author": {
+		"name": "EventStore"
+	},
+	"links": [
+		{
+			"uri": "http://127.0.0.1:2113/streams/newstream444",
+			"relation": "self"
+		},
+		{
+			"uri": "http://127.0.0.1:2113/streams/newstream444",
+			"relation": "first"
+		}
+	],
+	"entries": [
+				{
+			"title": "newstream444 #2",
+			"id": "http://127.0.0.1:2113/streams/newstream444/2",
+			"updated": "2012-09-06T16:40:24.695643Z",
+			"author": {
+				"name": "EventStore"
+			},
+			"summary": "Entry #2",
+			"links": [
+				{
+					"uri": "http://127.0.0.1:2113/streams/newstream444/2",
+					"relation": "edit"
+				},
+				{
+					"uri": "http://127.0.0.1:2113/streams/newstream444/event/2?format=text",
+					"type": "text/plain"
+				},
+				{
+					"uri": "http://127.0.0.1:2113/streams/newstream444/event/2?format=json",
+					"relation": "alternate",
+					"type": "application/json"
+				},
+				{
+					"uri": "http://127.0.0.1:2113/streams/newstream444/event/2?format=xml",
+					"relation": "alternate",
+					"type": "text/xml"
+				}
+			]
+		},
+		{
+			"title": "newstream444 #1",
+			"id": "http://127.0.0.1:2113/streams/newstream444/1",
+			"updated": "2012-09-06T16:39:44.695643Z",
+			"author": {
+				"name": "EventStore"
+			},
+			"summary": "Entry #1",
+			"links": [
+				{
+					"uri": "http://127.0.0.1:2113/streams/newstream444/1",
+					"relation": "edit"
+				},
+				{
+					"uri": "http://127.0.0.1:2113/streams/newstream444/event/1?format=text",
+					"type": "text/plain"
+				},
+				{
+					"uri": "http://127.0.0.1:2113/streams/newstream444/event/1?format=json",
+					"relation": "alternate",
+					"type": "application/json"
+				},
+				{
+					"uri": "http://127.0.0.1:2113/streams/newstream444/event/1?format=xml",
+					"relation": "alternate",
+					"type": "text/xml"
+				}
+			]
+		},
+		{
+			"title": "newstream444 #0",
+			"id": "http://127.0.0.1:2113/streams/newstream444/0",
+			"updated": "2012-09-06T16:39:44.695631Z",
+			"author": {
+				"name": "EventStore"
+			},
+			"summary": "Entry #0",
+			"links": [
+				{
+					"uri": "http://127.0.0.1:2113/streams/newstream444/0",
+					"relation": "edit"
+				},
+				{
+					"uri": "http://127.0.0.1:2113/streams/newstream444/event/0?format=text",
+					"type": "text/plain"
+				},
+				{
+					"uri": "http://127.0.0.1:2113/streams/newstream444/event/0?format=json",
+					"relation": "alternate",
+					"type": "application/json"
+				},
+				{
+					"uri": "http://127.0.0.1:2113/streams/newstream444/event/0?format=xml",
+					"relation": "alternate",
+					"type": "text/xml"
+				}
+			]
+		}
+	]
+}
+```
+
+</TabItem>
+</Tabs>
+
+## Stream metadata
+
+Every stream in EventStoreDB has metadata stream associated with it, prefixed by `$$`, so the metadata stream from a stream called `foo` is `$$foo`. Internally, the metadata includes information such as the ACL of the stream, the maximum count, and maximum age for the events in the stream. Client code can also add information into stream metadata for use with projections or the client API.
+
+Stream metadata is stored internally as JSON, and you can access it over the HTTP API.
+
+### Reading stream metadata
+
+To read the metadata, issue a `GET` request to the appropriate metadata resource at `http://{eventstore-ip-address}/streams/{stream-name}/metadata`.
+
+You should not access metadata by constructing this URL yourself, as ESDB reserves the right to change the resource address. Instead, prefer using the `relation:metadata` link returned when issuing a `GET` request for the stream, allowing your client to tolerate future changes to the addressing structure.
+
+<Tabs>
+  <TabItem value="request" label="Request">
+
+```bash
+curl -i -H "Accept:application/vnd.eventstore.atom+json" \
+    http://127.0.0.1:2113/streams/%24users --user admin:changeit
+```
+
+  </TabItem>
+  <TabItem value="response" label="Response">
+
+```json
+HTTP/1.1 200 OK
+Access-Control-Allow-Methods: POST, DELETE, GET, OPTIONS
+Access-Control-Allow-Headers: Content-Type, X-Requested-With, X-Forwarded-Host, X-Forwarded-Prefix, X-PINGOTHER, Authorization, ES-LongPoll, ES-ExpectedVersion, ES-EventId, ES-EventType, ES-RequiresMaster, ES-HardDelete, ES-ResolveLinkTos
+Access-Control-Allow-Origin: *
+Access-Control-Expose-Headers: Location, ES-Position, ES-CurrentVersion
+Cache-Control: max-age=0, no-cache, must-revalidate
+Vary: Accept
+ETag: "3;-2060438500"
+Content-Type: application/vnd.eventstore.atom+json; charset=utf-8
+Server: Mono-HTTPAPI/1.0
+Date: Thu, 23 Aug 2018 10:03:34 GMT
+Content-Length: 2670
+Keep-Alive: timeout=15,max=100
+
+{
+  "title": "Event stream '$users'",
+  "id": "http://127.0.0.1:2113/streams/%24users",
+  "updated": "2018-08-23T09:19:37.880827Z",
+  "streamId": "$users",
+  "author": {
+    "name": "EventStore"
+  },
+  "headOfStream": true,
+  "selfUrl": "http://127.0.0.1:2113/streams/%24users",
+  "eTag": "3;-2060438500",
+  "links": [
+    {
+      "uri": "http://127.0.0.1:2113/streams/%24users",
+      "relation": "self"
+    },
+    {
+      "uri": "http://127.0.0.1:2113/streams/%24users/head/backward/20",
+      "relation": "first"
+    },
+    {
+      "uri": "http://127.0.0.1:2113/streams/%24users/4/forward/20",
+      "relation": "previous"
+    },
+    {
+      "uri": "http://127.0.0.1:2113/streams/%24users/metadata",
+      "relation": "metadata"
+    }
+  ],
+  "entries": [
+    {
+      "title": "3@$users",
+      "id": "http://127.0.0.1:2113/streams/%24users/3",
+      "updated": "2018-08-23T09:19:37.880827Z",
+      "author": {
+        "name": "EventStore"
+      },
+      "summary": "$User",
+      "links": [
+        {
+          "uri": "http://127.0.0.1:2113/streams/%24users/3",
+          "relation": "edit"
+        },
+        {
+          "uri": "http://127.0.0.1:2113/streams/%24users/3",
+          "relation": "alternate"
+        }
+      ]
+    },
+    {
+      "title": "2@$users",
+      "id": "http://127.0.0.1:2113/streams/%24users/2",
+      "updated": "2018-08-23T09:08:40.499762Z",
+      "author": {
+        "name": "EventStore"
+      },
+      "summary": "$User",
+      "links": [
+        {
+          "uri": "http://127.0.0.1:2113/streams/%24users/2",
+          "relation": "edit"
+        },
+        {
+          "uri": "http://127.0.0.1:2113/streams/%24users/2",
+          "relation": "alternate"
+        }
+      ]
+    },
+    {
+      "title": "1@$users",
+      "id": "http://127.0.0.1:2113/streams/%24users/1",
+      "updated": "2018-08-23T07:55:39.833203Z",
+      "author": {
+        "name": "EventStore"
+      },
+      "summary": "$User",
+      "links": [
+        {
+          "uri": "http://127.0.0.1:2113/streams/%24users/1",
+          "relation": "edit"
+        },
+        {
+          "uri": "http://127.0.0.1:2113/streams/%24users/1",
+          "relation": "alternate"
+        }
+      ]
+    },
+    {
+      "title": "0@$users",
+      "id": "http://127.0.0.1:2113/streams/%24users/0",
+      "updated": "2018-08-23T07:55:39.829589Z",
+      "author": {
+        "name": "EventStore"
+      },
+      "summary": "$User",
+      "links": [
+        {
+          "uri": "http://127.0.0.1:2113/streams/%24users/0",
+          "relation": "edit"
+        },
+        {
+          "uri": "http://127.0.0.1:2113/streams/%24users/0",
+          "relation": "alternate"
+        }
+      ]
+    }
+  ]
+}
+```
+
+  </TabItem>
+</Tabs>
+
+Once you have the URI of the metadata stream, issue a `GET` request to retrieve the metadata:
+
+```bash
+curl -i -H "Accept:application/vnd.eventstore.atom+json" http://127.0.0.1:2113/streams/%24users/metadata --user admin:changeit
+```
+
+If you have security enabled, reading metadata may require that you pass credentials, as in the examples above. If credentials are required and you do not pass them, then you receive a `401 Unauthorized` response.
+
+<Tabs>
+  <TabItem value="request" label="Request">
+
+```bash
+curl -i -H "Accept:application/vnd.eventstore.atom+json" http://127.0.0.1:2113/streams/%24users
+```
+
+  </TabItem>
+  <TabItem value="response" label="Response">
+
+```http
+HTTP/1.1 401 Unauthorized
+Access-Control-Allow-Methods: GET, POST, GET, OPTIONS
+Access-Control-Allow-Headers: Content-Type, X-Requested-With, X-Forwarded-Host, X-Forwarded-Prefix, X-PINGOTHER, Authorization, ES-LongPoll, ES-ExpectedVersion, ES-EventId, ES-EventType, ES-RequiresMaster, ES-HardDelete, ES-ResolveLinkTos
+Access-Control-Allow-Origin: *
+Access-Control-Expose-Headers: Location, ES-Position, ES-CurrentVersion
+WWW-Authenticate: Basic realm="ES"
+Content-Type: text/plain; charset=utf-8
+Server: Mono-HTTPAPI/1.0
+Date: Thu, 23 Aug 2018 10:26:52 GMT
+Content-Length: 0
+Keep-Alive: timeout=15,max=100
+```
+
+  </TabItem>
+</Tabs>
+
+### Writing metadata
+
+To update the metadata for a stream, issue a `POST` request to the metadata resource.
+
+We can save the updated metadata to a file named `metadata.json`:
+
+```json
+[
+  {
+    "eventId": "7c314750-05e1-439f-b2eb-f5b0e019be72",
+    "eventType": "$user-updated",
+    "data": {
+      "readRole": "$all",
+      "metaReadRole": "$all"
+    }
+  }
+]
+```
+
+You can also add user-specified metadata in the `data` object. Some examples include:
+
+- Which adapter populates a stream.
+- Which projection created a stream.
+- A correlation ID to a business process.
+
+Send a `POST` request to the metadata resource to append this metadata update:
+
+<Tabs>
+  <TabItem value="request" label="Request">
+
+```bash
+curl -i -d @metadata.json http://127.0.0.1:2113/streams/%24users/metadata \
+    --user admin:changeit \
+    -H "Content-Type: application/vnd.eventstore.events+json"
+```
+
+  </TabItem>
+  <TabItem value="response" label="Response">
+
+```http
+HTTP/1.1 201 Created
+Access-Control-Allow-Methods: GET, POST, GET, OPTIONS
+Access-Control-Allow-Headers: Content-Type, X-Requested-With, X-Forwarded-Host, X-Forwarded-Prefix, X-PINGOTHER, Authorization, ES-LongPoll, ES-ExpectedVersion, ES-EventId, ES-EventType, ES-RequiresMaster, ES-HardDelete, ES-ResolveLinkTos
+Access-Control-Allow-Origin: *
+Access-Control-Expose-Headers: Location, ES-Position, ES-CurrentVersion
+Location: http://127.0.0.1:2113/streams/%24%24%24users/0
+Content-Type: text/plain; charset=utf-8
+Server: Mono-HTTPAPI/1.0
+Date: Thu, 23 Aug 2018 10:35:19 GMT
+Content-Length: 0
+Keep-Alive: timeout=15,max=100
+```
+
+  </TabItem>
+</Tabs>
+
+If the specified user does not have permissions to write to the stream metadata, you receive a `401 Unauthorized` response.

@@ -1,0 +1,728 @@
+---
+id: optional-http-headers
+title: Optional HTTP headers | HTTP API
+sidebar_label: Optional HTTP headers
+sidebar_position: 4
+---
+
+import Tabs from "@theme/Tabs";
+import TabItem from "@theme/TabItem";
+
+# Optional HTTP headers in HTTP API
+
+<!-- TODO: Can Swagger replace this? And sub files -->
+
+EventStoreDB supports custom HTTP headers for requests. The headers were previously in the form `X-ES-ExpectedVersion` but were changed to `ES-ExpectedVersion` in compliance with [RFC-6648](https://datatracker.ietf.org/doc/html/rfc6648).
+
+The headers supported are:
+
+| Header                                           | Description                                                                                         |
+| ------------------------------------------------ | --------------------------------------------------------------------------------------------------- |
+| [ES-EventId](#eventid)                           | Specifies the event ID associated with a posted body.                                               |
+| [ES-EventType](#eventtype)                       | Specifies the event type associated with a posted body.                                             |
+| [ES-ExpectedVersion](#expected-version)          | The expected version of the stream (allows optimistic concurrency).                                 |
+| [ES-HardDelete](#harddelete)                     | Instructs the server to hard delete the stream when deleting as opposed to the default soft delete. |
+| [ES-LongPoll](#longpoll)                         | Instructs the server to do a long poll operation on a stream read.                                  |
+| [ES-ResolveLinkTo](#resolve-linkto)              | Whether to resolve `linkTos` in stream.                                                             |
+| [ES-RequiresMaster](#requires-master)            | Whether this operation needs to run on the master node.                                             |
+| [ES-TrustedAuth](/security#trusted-intermediary) | Allows a trusted intermediary to handle authentication.                                             |
+
+## EventID
+
+When you append to a stream and don't use the `application/vnd.eventstore.events+json/+xml` media type, you need to specify an event ID with the event you post. This is not required with the custom media type as it is specified within the format (there is an `EventId` on each entry in the format). EventStoreDB uses `EventId` for impotency.
+
+You can include an event ID on an event by specifying this header.
+
+<Tabs>
+  <TabItem label="Request" value="request">
+
+```bash
+curl -i -d "@event.json" "http://127.0.0.1:2113/streams/newstream" \
+    -H "Content-Type:application/vnd.eventstore.events+json"
+    -u "admin:changeit"
+```
+
+  </TabItem>
+  <TabItem label="Response" value="response">
+
+```http
+HTTP/1.1 201 Created
+Access-Control-Allow-Methods: POST, DELETE, GET, OPTIONS
+Access-Control-Allow-Headers: Content-Type, X-Requested-With, X-PINGOTHER
+Access-Control-Allow-Origin: *
+Location: http://127.0.0.1:2113/streams/newstream/0
+Content-Type: text/plain; charset: utf-8
+Server: Mono-HTTPAPI/1.0
+Date: Fri, 28 Jun 2013 12:17:59 GMT
+Content-Length: 0
+Keep-Alive: timeout=15,max=100
+```
+
+  </TabItem>
+</Tabs>
+
+If you don't add an `ES-EventId` header on an append where the body is considered the actual event (e.g., not using `application/vnd.eventstore.events+json/+xml`) EventStoreDB generates a unique identifier for you and redirects you to an idempotent URI where you can post your event. If you can create a UUID then you shouldn't use this feature, but it's useful when you cannot create a UUID.
+
+For example, posting the event:
+
+```json
+[
+  {
+    "eventType": "event-type",
+    "data": {
+      "a": "1"
+    }
+  }
+]
+```
+
+<Tabs>
+  <TabItem label="Request" value="request">
+
+```bash
+curl -i -d "@event.json" "http://127.0.0.1:2113/streams/newstream" \
+    -H "Content-Type:application/json" \
+    -H "ES-EventType: SomeEvent"
+```
+
+  </TabItem>
+  <TabItem label="Response" value="response">
+
+```http
+HTTP/1.1 307 Temporary Redirect
+Access-Control-Allow-Methods: POST, DELETE, GET, OPTIONS
+Access-Control-Allow-Headers: Content-Type, X-Requested-With, X-Forwarded-Host, X-Forwarded-Prefix, X-PINGOTHER, Authorization, ES-LongPoll, ES-ExpectedVersion, ES-EventId, ES-EventType, ES-RequiresMaster, ES-HardDelete, ES-ResolveLinkTos
+Access-Control-Allow-Origin: *
+Access-Control-Expose-Headers: Location, ES-Position, ES-CurrentVersion
+Location: http://127.0.0.1:2113/streams/newstream/incoming/8a00e469-3a99-4517-a0b0-8dc662ffad9b
+Content-Type: text/plain; charset=utf-8
+Server: Mono-HTTPAPI/1.0
+Date: Tue, 24 Jul 2018 14:42:44 GMT
+Content-Length: 28
+Keep-Alive: timeout=15,max=100
+Forwarding to idempotent URI%
+```
+
+  </TabItem>
+</Tabs>
+
+EventStoreDB returned a `307 Temporary Redirect` with a location header that points to a generated URI that is idempotent for purposes of retrying the post.
+
+## EventType
+
+Just like with the EventID, if you do not use the `application/vnd.eventstore.events+json/+xml` media type when appending to a stream, you must specify an event type. This isn't required with the custom media type as it's specified within the format itself.
+
+Trying to append an event without either the proper header or media type results in a 400 error.
+
+<Tabs>
+  <TabItem label="Request" value="request">
+
+```bash
+curl -i -d "@event.json" "http://127.0.0.1:2113/streams/newstream" -H "Content-Type:application/json"
+```
+
+  </TabItem>
+  <TabItem label="Response" value="response">
+
+```http
+HTTP/1.1 400 Must include an event type with the request either in body or as ES-EventType header.
+Access-Control-Allow-Methods: POST, DELETE, GET, OPTIONS
+Access-Control-Allow-Headers: Content-Type, X-Requested-With, X-Forwarded-Host, X-Forwarded-Prefix, X-PINGOTHER, Authorization, ES-LongPoll, ES-ExpectedVersion, ES-EventId, ES-EventType, ES-RequiresMaster, ES-HardDelete, ES-ResolveLinkTos
+Access-Control-Allow-Origin: *
+Access-Control-Expose-Headers: Location, ES-Position, ES-CurrentVersion
+Content-Type:
+Server: Mono-HTTPAPI/1.0
+Date: Tue, 24 Jul 2018 14:50:59 GMT
+Content-Length: 0
+Connection: close
+```
+
+  </TabItem>
+</Tabs>
+
+Using the `ES-EventType` header as follows will result in a successful append.
+
+<Tabs>
+  <TabItem label="Request" value="request">
+
+```bash
+curl -i -d "@event.json" "http://127.0.0.1:2113/streams/newstream" \
+    -H "Content-Type:application/json" \
+    -H "ES-EventType: SomeEvent" \
+    -H "ES-EventId: fbf4a1a1-b4a3-4dfe-a01f-ec52c34e16e4"
+```
+
+  </TabItem>
+  <TabItem label="Response" value="response">
+
+```http
+HTTP/1.1 201 Created
+Access-Control-Allow-Methods: POST, DELETE, GET, OPTIONS
+Access-Control-Allow-Headers: Content-Type, X-Requested-With, X-PINGOTHER
+Access-Control-Allow-Origin: *
+Location: http://127.0.0.1:2113/streams/newstream/1
+Content-Type: text/plain; charset: utf-8
+Server: Mono-HTTPAPI/1.0
+Date: Fri, 28 Jun 2013 12:32:18 GMT
+Content-Length: 0
+Keep-Alive: timeout=15,max=100
+```
+
+  </TabItem>
+</Tabs>
+
+## Expected Version
+
+When you append to a stream, you often want to use `Expected Version` to allow for optimistic concurrency with a stream. You commonly use this for a domain object projection. In simple terms, the stream says, "An append operation can succeed if I have seen everyone else's append operations." You supply the expected version so everyone is checking the same spot.
+
+Set `ExpectedVersion` with the syntax `ES-ExpectedVersion: #`, where `#` is an integer version number. There are other special values available:
+
+- `0`, the stream should exist but be empty when appending.
+- `-1`, the stream should not exist when appending.
+- `-2`, the write should not conflict with anything and should always succeed.
+- `-4`, the stream or a metadata stream should exist when appending.
+
+If the `ExpectedVersion` does not match the version of the stream, EventStoreDB returns an HTTP 400 `Wrong expected EventNumber` response. This response contains the current version of the stream in an `ES-CurrentVersion` header.
+
+In the following cURL command `ExpectedVersion` is not set, and it appends or creates then appends to the stream.
+
+<Tabs>
+  <TabItem label="Request" value="request">
+
+```bash
+curl -i -d "@event.json" "http://127.0.0.1:2113/streams/newstream" \
+    -H "Content-Type:application/vnd.eventstore.events+json"
+    -u "admin:changeit"
+```
+
+  </TabItem>
+  <TabItem label="Response" value="response">
+
+```http
+HTTP/1.1 201 Created
+Access-Control-Allow-Methods: POST, DELETE, GET, OPTIONS
+Access-Control-Allow-Headers: Content-Type, X-Requested-With, X-PINGOTHER
+Access-Control-Allow-Origin: *
+Location: http://127.0.0.1:2113/streams/newstream/0
+Content-Type: text/plain; charset: utf-8
+Server: Mono-HTTPAPI/1.0
+Date: Fri, 28 Jun 2013 12:17:59 GMT
+Content-Length: 0
+Keep-Alive: timeout=15,max=100
+```
+
+  </TabItem>
+</Tabs>
+
+The stream `newstream` has one event. If you append with an expected version of `3`, you receive an error.
+
+<Tabs>
+  <TabItem label="Request" value="request">
+
+```bash
+curl -i -d @event-version.json "http://127.0.0.1:2113/streams/newstream" \
+    -H "Content-Type:application/vnd.eventstore.events+json" \
+    -H "ES-ExpectedVersion: 3"
+```
+
+  </TabItem>
+  <TabItem label="Response" value="response">
+
+```http
+HTTP/1.1 400 Wrong expected EventNumber
+Access-Control-Allow-Methods: POST, DELETE, GET, OPTIONS
+Access-Control-Allow-Headers: Content-Type, X-Requested-With, X-Forwarded-Host, X-Forwarded-Prefix, X-PINGOTHER, Authorization, ES-LongPoll, ES-ExpectedVersion, ES-EventId, ES-EventType, ES-RequiresMaster, ES-HardDelete, ES-ResolveLinkTos
+Access-Control-Allow-Origin: *
+Access-Control-Expose-Headers: Location, ES-Position, ES-CurrentVersion
+ES-CurrentVersion: 0
+Content-Type: text/plain; charset=utf-8
+Server: Mono-HTTPAPI/1.0
+Date: Tue, 14 Aug 2018 14:08:44 GMT
+Content-Length: 0
+Connection: close
+```
+
+  </TabItem>
+</Tabs>
+
+You can see from the `ES-CurrentVersion` header above that the stream is at version 0. Appending with an expected version of 0 works. The expected version is always the version of the last event known in the stream.
+
+<Tabs>
+  <TabItem label="Request" value="request">
+ 
+ ```bash
+ curl -i -d @event-version.json "http://127.0.0.1:2113/streams/newstream" \
+    -H "Content-Type:application/vnd.eventstore.events+json" \
+    -H "ES-CurrentVersion: 0"
+```
+
+  </TabItem>
+  <TabItem label="Response" value="response">
+
+```http
+HTTP/1.1 201 Created
+Access-Control-Allow-Methods: POST, DELETE, GET, OPTIONS
+Access-Control-Allow-Headers: Content-Type, X-Requested-With, X-Forwarded-Host, X-Forwarded-Prefix, X-PINGOTHER, Authorization, ES-LongPoll, ES-ExpectedVersion, ES-EventId, ES-EventType, ES-RequiresMaster, ES-HardDelete, ES-ResolveLinkTos
+Access-Control-Allow-Origin: *
+Access-Control-Expose-Headers: Location, ES-Position, ES-CurrentVersion
+Location: http://127.0.0.1:2113/streams/newstream/2
+Content-Type: text/plain; charset=utf-8
+Server: Mono-HTTPAPI/1.0
+Date: Tue, 14 Aug 2018 10:02:08 GMT
+Content-Length: 0
+Keep-Alive: timeout=15,max=100
+```
+
+  </TabItem>
+</Tabs>
+
+## HardDelete
+
+The `ES-HardDelete` header controls deleting a stream. By default EventStoreDB soft deletes a stream allowing you to later reuse that stream. If you set the `ES-HardDelete` header when sending a DELETE request to a stream URI, EventStoreDB permanently deletes the stream.
+
+<Tabs>
+  <TabItem label="Request" value="request">
+
+```bash
+curl -X DELETE http://127.0.0.1:2113/streams/newstream -H "ES-HardDelete:true"
+```
+
+  </TabItem>
+  <TabItem label="Response" value="response">
+
+```http
+HTTP/1.1 204 Stream deleted
+Content-Length: 0
+Content-Type: text/plain; charset=utf-8
+Server: Microsoft-HTTPAPI/2.0
+Access-Control-Allow-Methods: POST, DELETE, GET, OPTIONS
+Access-Control-Allow-Headers: Content-Type, X-Requested-With, X-PINGOTHER, Authorization
+Access-Control-Allow-Origin: *
+Access-Control-Expose-Headers: Location
+Date: Thu, 13 Mar 2014 20:56:55 GMT
+```
+
+  </TabItem>
+</Tabs>
+
+This changes the general behavior when issuing a GET request for a deleted stream. Instead of returning a 404 http response where the stream can be recreated on append (soft-delete), the stream now returns a `410 Deleted` response.
+
+## LongPoll
+
+You use the `ES-LongPoll` header to tell EventStoreDB to wait for a period of time when on the head link of a stream. At that point, no data is available, and you may want to wait to see if data becomes available.
+
+You can use this to provide lower latency for Atom clients instead of client initiated polling.
+
+Instead of the client polling every 5 seconds to get data from the feed, the client sends a request with `ES-LongPoll: 15`. This instructs EventStoreDB to wait for up to 15 seconds before returning with no result. The latency is therefore lowered from the poll interval to about 10ms from the time an event is appended until the time the HTTP connection is notified.
+
+Let's see how to use of the `ES-LongPoll` header in the following cURL command.
+
+First go to the head of the stream.
+
+<Tabs>
+  <TabItem label="Request" value="request">
+
+```bash
+curl -i -H "Accept:application/vnd.eventstore.atom+json" "http://127.0.0.1:2113/streams/newstream" -u "admin:changeit"
+```
+
+  </TabItem>
+  <TabItem label="Response" value="response">
+
+```json
+HTTP/1.1 200 OK
+Access-Control-Allow-Methods: POST, DELETE, GET, OPTIONS
+Access-Control-Allow-Headers: Content-Type, X-Requested-With, X-Forwarded-Host, X-Forwarded-Prefix, X-PINGOTHER, Authorization, ES-LongPoll, ES-ExpectedVersion, ES-EventId, ES-EventType, ES-RequiresMaster, ES-HardDelete, ES-ResolveLinkTos
+Access-Control-Allow-Origin: *
+Access-Control-Expose-Headers: Location, ES-Position, ES-CurrentVersion
+Cache-Control: max-age=0, no-cache, must-revalidate
+Vary: Accept
+ETag: "0;-2060438500"
+Content-Type: application/vnd.eventstore.atom+json; charset=utf-8
+Server: Mono-HTTPAPI/1.0
+Date: Fri, 15 Dec 2017 12:23:23 GMT
+Content-Length: 1262
+Keep-Alive: timeout=15,max=100
+
+{
+  "title": "Event stream 'newstream'",
+  "id": "http://127.0.0.1:2113/streams/newstream",
+  "updated": "2017-12-15T12:19:32.021776Z",
+  "streamId": "newstream",
+  "author": {
+    "name": "EventStore"
+  },
+  "headOfStream": true,
+  "selfUrl": "http://127.0.0.1:2113/streams/newstream",
+  "eTag": "0;-2060438500",
+  "links": [
+    {
+      "uri": "http://127.0.0.1:2113/streams/newstream",
+      "relation": "self"
+    },
+    {
+      "uri": "http://127.0.0.1:2113/streams/newstream/head/backward/20",
+      "relation": "first"
+    },
+    {
+      "uri": "http://127.0.0.1:2113/streams/newstream/1/forward/20",
+      "relation": "previous"
+    },
+    {
+      "uri": "http://127.0.0.1:2113/streams/newstream/metadata",
+      "relation": "metadata"
+    }
+  ],
+  "entries": [
+    {
+      "title": "0@newstream",
+      "id": "http://127.0.0.1:2113/streams/newstream/0",
+      "updated": "2017-12-15T12:19:32.021776Z",
+      "author": {
+        "name": "EventStore"
+      },
+      "summary": "event-type",
+      "links": [
+        {
+          "uri": "http://127.0.0.1:2113/streams/newstream/0",
+          "relation": "edit"
+        },
+        {
+          "uri": "http://127.0.0.1:2113/streams/newstream/0",
+          "relation": "alternate"
+        }
+      ]
+    }
+  ]
+}
+```
+
+  </TabItem>
+</Tabs>
+
+Then fetch the `previous` relation link `http://127.0.0.1:2113/streams/newstream/2/forward/20` and try it. It returns an empty feed.
+
+<Tabs>
+  <TabItem label="Request" value="request">
+
+```bash
+curl -i http://127.0.0.1:2113/streams/newstream/2/forward/20 \
+    -H "Accept: application/json"
+```
+
+  </TabItem>
+  <TabItem label="Response" value="response">
+
+```json
+HTTP/1.1 200 OK
+Access-Control-Allow-Methods: GET, OPTIONS
+Access-Control-Allow-Headers: Content-Type, X-Requested-With, X-Forwarded-Host, X-Forwarded-Prefix, X-PINGOTHER, Authorization, ES-LongPoll, ES-ExpectedVersion, ES-EventId, ES-EventType, ES-RequiresMaster, ES-HardDelete, ES-ResolveLinkTos
+Access-Control-Allow-Origin: *
+Access-Control-Expose-Headers: Location, ES-Position, ES-CurrentVersion
+Cache-Control: max-age=0, no-cache, must-revalidate
+Vary: Accept
+ETag: "1;1391431453"
+Content-Type: application/json; charset=utf-8
+Server: Mono-HTTPAPI/1.0
+Date: Mon, 27 Aug 2018 09:53:14 GMT
+Content-Length: 786
+Keep-Alive: timeout=15,max=100
+
+{
+  "title": "Event stream 'newstream'",
+  "id": "http://127.0.0.1:2113/streams/newstream",
+  "updated": "0001-01-01T00:00:00Z",
+  "streamId": "newstream",
+  "author": {
+    "name": "EventStore"
+  },
+  "headOfStream": true,
+  "links": [
+    {
+      "uri": "http://127.0.0.1:2113/streams/newstream",
+      "relation": "self"
+    },
+    {
+      "uri": "http://127.0.0.1:2113/streams/newstream/head/backward/20",
+      "relation": "first"
+    },
+    {
+      "uri": "http://127.0.0.1:2113/streams/newstream/0/forward/20",
+      "relation": "last"
+    },
+    {
+      "uri": "http://127.0.0.1:2113/streams/newstream/1/backward/20",
+      "relation": "next"
+    },
+    {
+      "uri": "http://127.0.0.1:2113/streams/newstream/metadata",
+      "relation": "metadata"
+    }
+  ],
+  "entries": []
+}
+```
+
+  </TabItem>
+</Tabs>
+
+The entries section is empty because there is no further data to provide. Now try the same URI with a long poll header.
+
+```bash
+curl -i http://127.0.0.1:2113/streams/newstream/2/forward/20 \
+    -H "Accept: application/json" \
+    -H "ES-LongPoll: 10"
+```
+
+If you do not insert any events into the stream while this is running, it takes 10 seconds for the HTTP request to finish and return an empty `entries` array again. If you append an event to the stream while it's running, you see the result for that request when you append the event.
+
+## Requires Master
+
+When running in a clustered environment there are times when you only want an operation to happen on the current leader node. A client can fetch information in an eventually consistent fashion by communicating with the servers. The TCP client included with the multi-node version does this.
+
+Over HTTP, the `RequiresMaster` header tells a node whether it is not allowed to serve a read or forward a write request. If the node is the leader, the operation proceeds as normal. If it is a follower node, it responds with a `307` temporary redirect to the leader.
+
+If we make the request below on the leader it is successful:
+
+<Tabs>
+<TabItem label="Request" value="request">
+
+```bash
+curl -i "http://127.0.0.1:32004/streams/newstream" \
+    -H "ES-RequireMaster: True"
+```
+
+</TabItem>
+<TabItem label="Response" value="response">
+
+```json
+HTTP/1.1 200 OK
+Cache-Control: max-age=0, no-cache, must-revalidate
+Content-Length: 1296
+Content-Type: application/vnd.eventstore.atom+json; charset: utf-8
+ETag: "0;-2060438500"
+Vary: Accept
+Server: Microsoft-HTTPAPI/2.0
+Access-Control-Allow-Methods: POST, DELETE, GET, OPTIONS
+Access-Control-Allow-Headers: Content-Type, X-Requested-With, X-PINGOTHER
+Access-Control-Allow-Origin: *
+Date: Thu, 27 Jun 2013 14:48:37 GMT
+
+{
+  "title": "Event stream 'stream'",
+  "id": "http://127.0.0.1:32004/streams/stream",
+  "updated": "2013-06-27T14:48:15.2596358Z",
+  "streamId": "stream",
+  "author": {
+    "name": "EventStore"
+  },
+  "links": [
+    {
+      "uri": "http://127.0.0.1:32004/streams/stream",
+      "relation": "self"
+    },
+    {
+      "uri": "http://127.0.0.1:32004/streams/stream/head/backward/20",
+      "relation": "first"
+    },
+    {
+      "uri": "http://127.0.0.1:32004/streams/stream/0/forward/20",
+      "relation": "last"
+    },
+    {
+      "uri": "http://127.0.0.1:32004/streams/stream/1/forward/20",
+      "relation": "previous"
+    },
+    {
+      "uri": "http://127.0.0.1:32004/streams/stream/metadata",
+      "relation": "metadata"
+    }
+  ],
+  "entries": [
+    {
+      "title": "0@stream",
+      "id": "http://127.0.0.1:32004/streams/stream/0",
+      "updated": "2013-06-27T14:48:15.2596358Z",
+      "author": {
+        "name": "EventStore"
+      },
+      "summary": "TakeSomeSpaceEvent",
+      "links": [
+        {
+          "uri": "http://127.0.0.1:32004/streams/stream/0",
+          "relation": "edit"
+        },
+        {
+          "uri": "http://127.0.0.1:32004/streams/stream/0",
+          "relation": "alternate"
+        }
+      ]
+    }
+  ]
+}
+```
+
+</TabItem>
+</Tabs>
+
+But running it on any other node will return a redirect to the leader. In this case, `127.0.0.1:31004`:
+
+<Tabs>
+<TabItem label="Request" value="request">
+
+```bash
+curl -i "http://127.0.0.1:31004/streams/newstream" \
+    -H "ES-RequireMaster: True"
+```
+
+</TabItem>
+<TabItem label="Response" value="response">
+
+```http
+HTTP/1.1 307 Temporary Redirect
+Content-Length: 0
+Content-Type: text/plain; charset: utf-8
+Location: http://127.0.0.1:32004/streams/stream
+Server: Microsoft-HTTPAPI/2.0
+Access-Control-Allow-Methods: POST, DELETE, GET, OPTIONS
+Access-Control-Allow-Headers: Content-Type, X-Requested-With, X-PINGOTHER
+Access-Control-Allow-Origin: *
+Date: Thu, 27 Jun 2013 14:48:28 GMT
+```
+
+</TabItem>
+</Tabs>
+
+## Resolve LinkTo
+
+When using projections, you can have links placed into another stream by using the `trackemittedstreams` parameter when [creating a projection](./api.md#create-a-continuous-projection). By default, EventStoreDB always resolves `linkTo`s for you, returning the event that points to the link. You can use the `ES-ResolveLinkTos: false` HTTP header to tell EventStoreDB to return you the actual link and to not resolve it.
+
+You can see the differences in behavior in the following cURL commands.
+
+<Tabs>
+  <TabItem label="Request" value="request">
+
+```bash
+curl -i http://127.0.0.1:2113/streams/shoppingCart-b989fe21-9469-4017-8d71-9820b8dd1167/0 \
+    -H "accept:application/vnd.eventstore.atom+json"
+    -H "ES-ResolveLinkTos: true"
+```
+
+  </TabItem>
+  <TabItem label="Response" value="response">
+
+```json
+HTTP/1.1 200 OK
+Access-Control-Allow-Methods: GET, OPTIONS
+Access-Control-Allow-Headers: Content-Type, X-Requested-With, X-Forwarded-Host, X-Forwarded-Prefix, X-PINGOTHER, Authorization, ES-LongPoll, ES-ExpectedVersion, ES-EventId, ES-EventType, ES-RequiresMaster, ES-HardDelete, ES-ResolveLinkTos
+Access-Control-Allow-Origin: *
+Access-Control-Expose-Headers: Location, ES-Position, ES-CurrentVersion
+Cache-Control: max-age=31536000, public
+Vary: Accept
+Content-Type: application/vnd.eventstore.atom+json; charset=utf-8
+Server: Mono-HTTPAPI/1.0
+Date: Tue, 28 Aug 2018 13:13:49 GMT
+Content-Length: 918
+Keep-Alive: timeout=15,max=100
+
+{
+  "title": "0@shoppingCart-b989fe21-9469-4017-8d71-9820b8dd1167",
+  "id": "http://127.0.0.1:2113/streams/shoppingCart-b989fe21-9469-4017-8d71-9820b8dd1167/0",
+  "updated": "2018-08-28T12:56:15.263731Z",
+  "author": {
+    "name": "EventStore"
+  },
+  "summary": "ItemAdded",
+  "content": {
+    "eventStreamId": "shoppingCart-b989fe21-9469-4017-8d71-9820b8dd1167",
+    "eventNumber": 0,
+    "eventType": "ItemAdded",
+    "eventId": "b989fe21-9469-4017-8d71-9820b8dd1167",
+    "data": {
+      "Description": "Xbox One Elite (Console)"
+    },
+    "metadata": {
+      "TimeStamp": "2016-12-23T10:00:00.9225401+01:00"
+    }
+  },
+  "links": [
+    {
+      "uri": "http://127.0.0.1:2113/streams/shoppingCart-b989fe21-9469-4017-8d71-9820b8dd1167/0",
+      "relation": "edit"
+    },
+    {
+      "uri": "http://127.0.0.1:2113/streams/shoppingCart-b989fe21-9469-4017-8d71-9820b8dd1167/0",
+      "relation": "alternate"
+    }
+  ]
+}
+```
+
+  </TabItem>
+</Tabs>
+
+The content links above are pointing to the original projection stream. The linked events are resolved back to where they point.
+
+When we set the `ES-ResolveLinkTos` header to "false", information on the stream created by our projection is returned:
+
+<Tabs>
+  <TabItem label="Request" value="request">
+
+```bash
+curl -i http://127.0.0.1:2113/streams/shoppingCart-b989fe21-9469-4017-8d71-9820b8dd1167/0 \
+    -H "accept:application/vnd.eventstore.atom+json"
+    -H "ES-ResolveLinkTos: false"
+```
+
+  </TabItem>
+  <TabItem label="Response" value="response">
+
+```json
+HTTP/1.1 200 OK
+Access-Control-Allow-Methods: GET, OPTIONS
+Access-Control-Allow-Headers: Content-Type, X-Requested-With, X-Forwarded-Host, X-Forwarded-Prefix, X-PINGOTHER, Authorization, ES-LongPoll, ES-ExpectedVersion, ES-EventId, ES-EventType, ES-RequiresMaster, ES-HardDelete, ES-ResolveLinkTos
+Access-Control-Allow-Origin: *
+Access-Control-Expose-Headers: Location, ES-Position, ES-CurrentVersion
+Cache-Control: max-age=31536000, public
+Vary: Accept
+Content-Type: application/vnd.eventstore.atom+json; charset=utf-8
+Server: Mono-HTTPAPI/1.0
+Date: Tue, 28 Aug 2018 13:22:09 GMT
+Content-Length: 918
+Keep-Alive: timeout=15,max=100
+
+{
+  "title": "0@shoppingCart-b989fe21-9469-4017-8d71-9820b8dd1167",
+  "id": "http://127.0.0.1:2113/streams/shoppingCart-b989fe21-9469-4017-8d71-9820b8dd1167/0",
+  "updated": "2018-08-28T12:56:15.263731Z",
+  "author": {
+    "name": "EventStore"
+  },
+  "summary": "ItemAdded",
+  "content": {
+    "eventStreamId": "shoppingCart-b989fe21-9469-4017-8d71-9820b8dd1167",
+    "eventNumber": 0,
+    "eventType": "ItemAdded",
+    "eventId": "b989fe21-9469-4017-8d71-9820b8dd1167",
+    "data": {
+      "Description": "Xbox One Elite (Console)"
+    },
+    "metadata": {
+      "TimeStamp": "2016-12-23T10:00:00.9225401+01:00"
+    }
+  },
+  "links": [
+    {
+      "uri": "http://127.0.0.1:2113/streams/shoppingCart-b989fe21-9469-4017-8d71-9820b8dd1167/0",
+      "relation": "edit"
+    },
+    {
+      "uri": "http://127.0.0.1:2113/streams/shoppingCart-b989fe21-9469-4017-8d71-9820b8dd1167/0",
+      "relation": "alternate"
+    }
+  ]
+}
+```
+
+  </TabItem>
+</Tabs>
