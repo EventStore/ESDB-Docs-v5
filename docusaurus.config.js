@@ -9,11 +9,11 @@ import { themes as prismThemes } from "prism-react-renderer";
 /** @type {import('@docusaurus/types').Config} */
 const config = {
   title: "EventStoreDB v5 Documentation",
-  tagline: "",
+  tagline: "An event native database",
   favicon: "img/favicon.ico",
 
   // Set the production url of your site here
-  url: "https://your-docusaurus-site.example.com",
+  url: "https://www.v5-docs.eventstore.com",
   // Set the /<baseUrl>/ pathname under which your site is served
   // For GitHub pages deployment, it is often '/<projectName>/'
   baseUrl: "/",
@@ -41,30 +41,14 @@ const config = {
       ({
         docs: {
           sidebarPath: "./sidebars.js",
-          // Please change this to your repo.
           // Remove this to remove the "edit this page" links.
-          routeBasePath: "docs",
-          editUrl:
-            "https://github.com/facebook/docusaurus/tree/main/packages/create-docusaurus/templates/shared/",
+          routeBasePath: "/",
         },
         blog: false,
         theme: {
           customCss: "./src/css/custom.css",
         },
       }),
-    ],
-  ],
-
-  plugins: [
-    [
-      "@docusaurus/plugin-content-docs",
-      {
-        id: "http-api",
-        path: "http-api",
-        routeBasePath: "http-api",
-        sidebarPath: "./sidebarsHttp.js",
-        // ... other options
-      },
     ],
   ],
 
@@ -81,7 +65,7 @@ const config = {
           height: "40px",
         },
         items: [
-          { to: "/docs", label: "v5 Home" },
+          { to: "/", label: "v5 Home" },
           {
             to: "/http-api",
             label: "HTTP API",
@@ -142,12 +126,10 @@ const config = {
               {
                 label: "Server",
                 href: "https://developers.eventstore.com/docs/intro",
-                target: "_self",
               },
               {
                 label: "Cloud",
                 href: "https://developers.eventstore.com/cloud",
-                target: "_self",
               },
             ],
           },

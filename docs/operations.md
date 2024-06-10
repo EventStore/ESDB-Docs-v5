@@ -38,7 +38,7 @@ curl -i -d {} -X POST http://localhost:2113/admin/scavenge -u "admin:changeit"
 ```
 
 :::tip
-Scavenge operations have other options you can set to improve performance. For example, you can set the number of threads to use. Check [the API docs](../http-api/http-api.md#scavenge-a-node) for more details.
+Scavenge operations have other options you can set to improve performance. For example, you can set the number of threads to use. Check [the API docs](/http-api/http-api#scavenge-a-node) for more details.
 :::
 
 :::tip

@@ -58,6 +58,10 @@
   color: black;
 }
 
+.navbar__link--active {
+  color: #f6f6f6;
+}
+
 .footer {
   --ifm-footer-background-color: #09264a;
 }
