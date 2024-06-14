@@ -23,7 +23,7 @@ const sidebars = {
       type: "category",
       label: "Getting Started",
       collapsible: false,
-      items: ["introduction", "installation"],
+      items: ["introduction", "installation", "changes"],
     },
     {
       type: "category",
